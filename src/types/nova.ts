@@ -62,7 +62,7 @@ export const defaultUiAgent: Agent = {
     id: "default-ui-agent",
     name: "Default UI Agent",
     actions: [
-        'navigate to different pages on the site, and report visual errors with the user interface',
+        'navigate to different pages on the site and report visual errors with the user interface',
     ],
     context: "",
     fileNames: [],

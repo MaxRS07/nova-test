@@ -4,6 +4,7 @@ from fastapi import WebSocket, WebSocketDisconnect, APIRouter
 import asyncio
 import uuid
 from typing import Dict, Any
+from nova.types import Agent
 
 router = APIRouter()
 
@@ -163,14 +164,13 @@ async def execute_act_run(run_id: str, config: dict):
     url = config.get("url", "")
     context = config.get("context", "")
     steps = config.get("steps", [])
-    agent_config = config.get("agent_config", [])
+    agent_config = list(map(lambda x: Agent(**x), config.get("agent_config", [])))
     pages = config.get("pages", [])
-
-    
+    print(agent_config)
     try:
         await run_manager.emit(run_id, "status", {"status": "started"})
         runner = ActRunner(run_id=run_id)
-        async for metadata in runner.run_act(url, pages, context, *steps, agent_config=agent_config):
+        async for metadata in runner.run_act(url, pages, agent_config):
             # Convert metadata to a JSON-serializable dictionary
             metadata_dict = {
                 "prompt": metadata.prompt,

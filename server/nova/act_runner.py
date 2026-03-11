@@ -122,12 +122,12 @@ class ActRunner:
             subpages = []
             _agent_config = agent_config[0]
             try:
-                agent = self.create_agent(url, _agent_config, human_callback)
+                agent = self.create_agent(url, human_callback, _agent_config)
                 self.nova = agent
                 
                 try:
                     with agent:
-                        for step in _agent_config.actions:
+                        for step in _agent_config.get("actions", []):
                             step_start = time.time()
                             try:
                                 res = agent.act(step)
@@ -222,7 +222,9 @@ class ActRunner:
         finally:
             # Wait for thread to finish cleanly
             try:
-                await loop.run_in_executor(None, thread.join, timeout=10)
+                await asyncio.wait_for(loop.run_in_executor(None, thread.join), timeout=10)
+            except asyncio.TimeoutError:
+                logger.warning("Timeout waiting for thread to finish")
             except Exception as join_error:
                 logger.warning(f"Error waiting for thread to finish: {str(join_error)}")
             
