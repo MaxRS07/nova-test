@@ -1,15 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-import asyncio
-import os
 from websocket_manager import router as ws_router, run_manager
 from nova.process_manager import process_manager
-from nova.act_runner import ActRunner
+from nova.types import Agent
 
 
 # Lifespan context manager for startup/shutdown
-@asynccontextmanager
+@asynccontextmanager  
 async def lifespan(app: FastAPI):
     # Startup
     print("🚀 Nova Flow API starting up...")
@@ -54,37 +52,18 @@ async def root():
 async def start_act(data: dict):
     """
     Start a new Nova Act run.
-    Returns a run_id — connect to ws/run/{run_id} to stream events.
+    Returns a run_id — connect to ws/run/{run_id}, send {"type": "start"} to begin execution.
     """
     url = data.get("url", "")
-    context = data.get("context", "")
-    steps = data.get("steps", [])
+    pages = data.get("pages", [])
+    agent_config = map(lambda x: Agent(**x), data.get("agent_config", []))
 
     run_id = run_manager.create_run()
+    
+    # Store the configuration for later use when "start" command is received
+    run_manager.store_run_config(run_id, {"url": url, "pages": pages, "agent_config": list(agent_config)})
 
-    async def _run():
-        try:
-            await run_manager.emit(run_id, "status", {"status": "started"})
-            runner = ActRunner(run_id=run_id)
-            async for metadata in runner.run_act(url, context, *steps):
-                await run_manager.emit(run_id, "step_complete", {
-                    "prompt": metadata.prompt,
-                    "num_steps": metadata.num_steps_executed,
-                })
-            await run_manager.emit(run_id, "status", {"status": "completed"})
-            process_manager.mark_done(run_id, "completed")
-        except asyncio.CancelledError:
-            await run_manager.emit(run_id, "status", {"status": "cancelled"})
-            process_manager.mark_done(run_id, "cancelled")
-        except Exception as e:
-            await run_manager.emit(run_id, "status", {"status": "error", "error": str(e)})
-            process_manager.mark_done(run_id, "error")
-
-    task = asyncio.create_task(_run())
-    process_manager.register(run_id, task, {"url": url, "steps": steps})
-    run_manager.register_task(run_id, task)
-
-    return {"run_id": run_id }
+    return {"run_id": run_id}
 
 
 def start_server():

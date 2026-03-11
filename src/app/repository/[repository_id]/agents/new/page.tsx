@@ -1,13 +1,20 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
 import Topbar from '@/components/Topbar';
 import MarkdownEditor from '@/components/MarkdownEditor';
 import Link from 'next/link';
 import InfoIcon from '@/components/InfoIcon';
+import { Agent } from '@/types/nova';
 
-export default function NewModel() {
+export default function NewAgentPage() {
+  const router = useRouter();
+  const params = useParams();
+  const repositoryId = params.repository_id;
+
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
   const [actions, setActions] = useState(['']);
@@ -18,7 +25,8 @@ export default function NewModel() {
   const [topP, setTopP] = useState(0.9);
   const [maxTokens, setMaxTokens] = useState(2048);
   const [selectedTools, setSelectedTools] = useState<string[]>([]);
-  const [toolInput, setToolInput] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const availableTools = [
     'web_search',
@@ -29,41 +37,85 @@ export default function NewModel() {
     'email_sender',
   ];
 
-  const toggleTool = (tool: string) => {
-    setSelectedTools(prev =>
-      prev.includes(tool) ? prev.filter(t => t !== tool) : [...prev, tool]
-    );
-  };
-
   const addAction = () => setActions([...actions, '']);
   const removeAction = (i: number) => setActions(actions.filter((_, idx) => idx !== i));
   const updateAction = (i: number, v: string) => {
-    const a = [...actions]; a[i] = v; setActions(a);
+    const a = [...actions];
+    a[i] = v;
+    setActions(a);
   };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
     const allowed = ['.pdf', '.txt', '.md', '.json', '.csv', '.doc', '.docx'];
-    setFiles([...files, ...Array.from(e.target.files).filter((f) => allowed.some((ext) => f.name.endsWith(ext)))]);
+    setFiles([
+      ...files,
+      ...Array.from(e.target.files).filter((f) =>
+        allowed.some((ext) => f.name.endsWith(ext))
+      ),
+    ]);
   };
-  const handleSubmit = (e: React.FormEvent) => {
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    console.log({
-      name,
-      url,
-      actions,
-      context,
-      files,
-      config: {
-        temperature,
-        topP,
-        maxTokens,
-      },
-      selectedTools,
-    });
+    setErrorMessage(null);
+    setIsSubmitting(true);
+
+    try {
+      // Validate form
+      if (!name.trim()) {
+        throw new Error('Agent name is required');
+      }
+      if (actions.filter((a) => a.trim()).length === 0) {
+        throw new Error('At least one action is required');
+      }
+
+      // Create agent object
+      const agent: Agent = {
+        id: `agent-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        name: name.trim(),
+        actions: actions.filter((a) => a.trim()),
+        context: context.trim(),
+        fileNames: files.map((f) => f.name),
+        config: {
+          temperature,
+          topP,
+          maxTokens,
+        },
+        selectedTools,
+        created: new Date().toISOString(),
+      };
+
+      // Load existing agents from localStorage
+      const existingAgentsJson = typeof window !== 'undefined' ? localStorage.getItem('nova-agents') : null;
+      const existingAgents: Agent[] = existingAgentsJson ? JSON.parse(existingAgentsJson) : [];
+
+      // Add new agent
+      const updatedAgents = [agent, ...existingAgents];
+
+      // Save back to localStorage
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('nova-agents', JSON.stringify(updatedAgents));
+      }
+
+      // Redirect to agents page
+      router.push(`/repository/${repositoryId}/agents`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to create agent';
+      setErrorMessage(message);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const inputClass = 'w-full px-4 py-3 text-sm font-mono rounded-lg bg-[var(--muted-bg)] text-[var(--foreground)] placeholder-[var(--muted)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/30 transition-all';
   const labelClass = 'flex items-center text-xs font-mono font-medium text-[var(--muted)] uppercase tracking-wider mb-2.5';
+
+  const toggleTool = (tool: string) => {
+    setSelectedTools((prev) =>
+      prev.includes(tool) ? prev.filter((t) => t !== tool) : [...prev, tool]
+    );
+  };
 
   return (
     <div className="flex h-screen bg-[var(--background)]">
@@ -82,6 +134,12 @@ export default function NewModel() {
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-8">
+              {/* Error message */}
+              {errorMessage && (
+                <div className="bg-rose-500/10 border border-rose-500/30 rounded-lg p-4">
+                  <p className="text-sm font-mono text-rose-500">{errorMessage}</p>
+                </div>
+              )}
               {/* Name */}
               <div>
                 <label className={labelClass}>
@@ -255,11 +313,21 @@ export default function NewModel() {
               </div>
               {/* Submit */}
               <div className="flex gap-3 pt-4">
-                <button type="submit" className="px-6 py-3 text-sm font-mono bg-[var(--accent)] text-white rounded-lg hover:opacity-90 transition-opacity">
-                  create model
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className={`px-6 py-3 text-sm font-mono rounded-lg transition-opacity ${isSubmitting
+                    ? 'bg-[var(--muted)] text-[var(--muted-text)] cursor-not-allowed opacity-50'
+                    : 'bg-[var(--accent)] text-white hover:opacity-90'
+                    }`}
+                >
+                  {isSubmitting ? 'Creating...' : 'Create Agent'}
                 </button>
-                <Link href="/" className="px-6 py-3 text-sm font-mono text-[var(--muted)] hover:text-[var(--foreground-soft)] hover:bg-[var(--muted-bg)] rounded-lg transition-all">
-                  cancel
+                <Link
+                  href={`/repository/${repositoryId}/agents`}
+                  className="px-6 py-3 text-sm font-mono text-[var(--muted)] hover:text-[var(--foreground-soft)] hover:bg-[var(--muted-bg)] rounded-lg transition-all"
+                >
+                  Cancel
                 </Link>
               </div>
             </form>

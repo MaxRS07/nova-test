@@ -37,15 +37,6 @@ export default function Topbar() {
                 )}
             </div>
 
-            <div className="flex-1 max-w-md mx-8">
-                <input
-                    type="text"
-                    placeholder="Search projects..."
-                    className="w-full px-3.5 py-2 text-sm rounded-lg bg-[var(--muted-bg)] text-[var(--foreground)] placeholder-[var(--muted)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/30 transition-all"
-                    style={{ border: 'none' }}
-                />
-            </div>
-
             <div className="flex items-center gap-4">
                 <button
                     onClick={toggleWebCLI}

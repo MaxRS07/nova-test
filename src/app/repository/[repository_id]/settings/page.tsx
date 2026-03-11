@@ -34,7 +34,7 @@ export default function RepositorySettings() {
                     <div className="max-w-2xl mx-auto px-10 py-12">
 
                         {/* Header */}
-                        <div className="mb-12">
+                        <div className="mb-8">
                             <p className="text-xs font-mono text-[var(--muted)] uppercase tracking-widest mb-2">Repository · {repositoryId}</p>
                             <h1 className="text-2xl font-semibold text-[var(--foreground)] tracking-tight">Settings</h1>
                         </div>
@@ -45,8 +45,10 @@ export default function RepositorySettings() {
                             <div className="bg-[var(--surface)] rounded-xl px-6 py-5" style={{ border: '1px solid var(--border-subtle)' }}>
                                 <div className="flex items-center justify-between">
                                     <div className="flex-1">
-                                        <h3 className="text-sm font-medium text-[var(--foreground)] mb-1">Automatically approve model actions</h3>
-                                        <p className="text-xs text-[var(--muted)] font-mono">Allow the AI model to execute actions without requiring manual approval</p>
+                                        <div className='justify-between flex flex-row'>
+                                            <h3 className="text-sm font-medium text-[var(--foreground)] mb-1">Automatically approve model actions</h3>
+                                        </div>
+                                        <p className="text-xs text-[var(--muted)] font-mono">Allow Act agents to execute actions without requiring manual approval</p>
                                     </div>
                                     <label className="relative inline-block w-12 h-6 ml-4">
                                         <input
@@ -56,7 +58,7 @@ export default function RepositorySettings() {
                                             className="sr-only"
                                         />
                                         <div
-                                            className={`block w-full h-full rounded-full transition-colors cursor-pointer ${autoApproveActions ? 'bg-emerald-500' : 'bg-[var(--muted-bg)]'
+                                            className={`block w-full h-full rounded-full transition-colors cursor-pointer ${autoApproveActions ? 'bg-[var(--accent)]`' : 'bg-[var(--muted-bg)]'
                                                 }`}
                                         />
                                         <div
