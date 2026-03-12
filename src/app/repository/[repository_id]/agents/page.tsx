@@ -12,7 +12,7 @@ import { getAgents, deleteAgent } from '@/lib/supabase';
 export default function AgentsPage() {
     const params = useParams();
     const router = useRouter();
-    const repositoryId = params.repository_id;
+    const repositoryId = Number(params.repository_id);
 
     const [agents, setAgents] = useState<Agent[]>([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -21,7 +21,7 @@ export default function AgentsPage() {
     useEffect(() => {
         const loadAgents = async () => {
             try {
-                const loadedAgents = await getAgents(repositoryId as string);
+                const loadedAgents = await getAgents(repositoryId);
                 setAgents(loadedAgents);
             } catch (error) {
                 console.error('Failed to load agents:', error);

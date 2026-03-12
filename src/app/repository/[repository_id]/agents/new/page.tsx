@@ -14,7 +14,7 @@ import { saveAgent } from '@/lib/supabase';
 export default function NewAgentPage() {
   const router = useRouter();
   const params = useParams();
-  const repositoryId = params.repository_id;
+  const repositoryId = Number(params.repository_id);
 
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
@@ -74,6 +74,7 @@ export default function NewAgentPage() {
       // Create agent object
       const agent: Agent = {
         id: `agent-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        repo_id: repositoryId,
         name: name.trim(),
         actions: actions.filter((a) => a.trim()),
         context: context.trim(),
@@ -88,7 +89,7 @@ export default function NewAgentPage() {
       };
 
       // Save to database
-      await saveAgent(repositoryId as string, agent);
+      await saveAgent(agent);
 
       // Redirect to agents page
       router.push(`/repository/${repositoryId}/agents`);

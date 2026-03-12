@@ -12,7 +12,7 @@ import { getAgent, saveAgent, deleteAgent } from '@/lib/supabase';
 export default function AgentDetailPage() {
     const router = useRouter();
     const params = useParams();
-    const repositoryId = params.repository_id as string;
+    const repositoryId = Number(params.repository_id);
     const agentId = params.agent_id as string;
 
     const [agent, setAgent] = useState<Agent | null>(null);
@@ -112,7 +112,7 @@ export default function AgentDetailPage() {
             };
 
             // Save to database
-            await saveAgent(repositoryId, updatedAgent);
+            await saveAgent(updatedAgent);
             setSuccessMessage('Agent updated successfully!');
 
             setTimeout(() => {

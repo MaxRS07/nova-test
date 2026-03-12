@@ -7,7 +7,6 @@
  * Common request/response types
  */
 
-
 export type ActMetadata = {
     session_id: string;
     act_id: string;
@@ -32,6 +31,7 @@ export type TestRunStatus = 'running' | 'completed' | 'failed';
 
 export type TestRun = {
     id: string;
+    repo_id: number;
     url: string;
     pages: string[];
     config: string;
@@ -39,12 +39,19 @@ export type TestRun = {
     userAgents: string[];
     status: TestRunStatus;
     timestamp: string;
-    faults: number;
+    faults: Fault[];
     duration: string;
     logs: string[];
 }
+
+export type Fault = {
+    description: string;
+    severity: 'low' | 'medium' | 'high';
+    evidence: string[];
+}
 export interface Agent {
     id: string;
+    repo_id?: number;
     name: string;
     actions: string[];
     context: string;
@@ -56,6 +63,13 @@ export interface Agent {
     };
     selectedTools: string[];
     created: string;
+}
+
+export interface Project {
+    repo_id: number;
+    url?: string;
+    user_id?: string;
+    created_at?: string;
 }
 
 export const defaultUiAgent: Agent = {

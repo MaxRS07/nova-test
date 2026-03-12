@@ -13,7 +13,7 @@ import { getTestRuns, saveTestRun, deleteTestRun } from '@/lib/supabase';
 
 export default function TestPage() {
     const params = useParams();
-    const repositoryId = params.repository_id;
+    const repositoryId = Number(params.repository_id);
     const router = useRouter();
 
     const [view, setView] = useState<'list' | 'new'>('list');
@@ -41,7 +41,7 @@ export default function TestPage() {
     useEffect(() => {
         const loadTestRuns = async () => {
             try {
-                const runs = await getTestRuns(repositoryId as string);
+                const runs = await getTestRuns(repositoryId);
                 setTestRuns(runs);
             } catch (error) {
                 console.error('Failed to load test runs:', error);
@@ -105,6 +105,7 @@ export default function TestPage() {
 
             const newRun: TestRun = {
                 id: runId,
+                repo_id: repositoryId,
                 url: testUrl,
                 pages: subpages,
                 config: selectedConfig,
@@ -112,7 +113,7 @@ export default function TestPage() {
                 userAgents: [...userAgents],
                 status: 'running',
                 timestamp: new Date().toLocaleString(),
-                faults: 0,
+                faults: [],
                 duration: '—',
                 logs: [],
             };
@@ -123,7 +124,7 @@ export default function TestPage() {
 
             // Save new test run to database
             try {
-                await saveTestRun(repositoryId as string, newRun);
+                await saveTestRun(newRun);
             } catch (error) {
                 console.error('Failed to save test run:', error);
             }
@@ -155,7 +156,7 @@ export default function TestPage() {
                 ));
 
                 // Save completed test run to database
-                saveTestRun(repositoryId as string, updatedRun).catch(error => {
+                saveTestRun(updatedRun).catch(error => {
                     console.error('Failed to save completed test run:', error);
                 });
 
@@ -171,7 +172,7 @@ export default function TestPage() {
                 ));
 
                 // Save failed test run to database
-                saveTestRun(repositoryId as string, failedRun).catch(err => {
+                saveTestRun(failedRun).catch(err => {
                     console.error('Failed to save error test run:', err);
                 });
 
@@ -294,7 +295,7 @@ export default function TestPage() {
                                                 </span>
                                                 <span>{statusBadge(run.status)}</span>
                                                 <span className="font-mono text-sm text-[var(--foreground)]">{run.agents}</span>
-                                                <span className={`font-mono text-sm ${run.faults > 0 ? 'text-rose-500' : 'text-emerald-500'}`}>{run.faults}</span>
+                                                <span className={`font-mono text-sm ${run.faults.length > 0 ? 'text-rose-500' : 'text-emerald-500'}`}>{run.faults.length}</span>
                                                 <span className="font-mono text-sm text-[var(--foreground-soft)]">{run.timestamp}</span>
                                                 <span className="font-mono text-sm text-[var(--muted)]">{run.duration}</span>
                                                 <button

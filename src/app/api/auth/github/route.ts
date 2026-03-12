@@ -3,16 +3,17 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createJWT } from "@/lib/jwt";
 import { GithubUser } from "@/types/gh_user";
-import { stat } from "fs";
 
 const {
     GITHUB_CLIENT_ID,
     GITHUB_CLIENT_SECRET,
     GITHUB_REDIRECT_URL,
+    NEXT_PUBLIC_APP_URL,
     NODE_ENV,
 } = process.env;
 
 const isProduction = NODE_ENV === "production";
+const APP_URL = NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 
 function mustGetEnv(name: string, value?: string): string {
     if (!value) throw new Error(`Missing required env var: ${name}`);
@@ -23,7 +24,7 @@ function randomState() {
     return crypto.randomBytes(16).toString("hex");
 }
 
-async function exchangeCodeForToken(code: string) {
+async function exchangeCodeForToken(code: string): Promise<string> {
     const res = await fetch("https://github.com/login/oauth/access_token", {
         method: "POST",
         headers: {
@@ -48,16 +49,14 @@ async function exchangeCodeForToken(code: string) {
 }
 
 async function fetchGitHubUser(accessToken: string): Promise<GithubUser> {
-    const res = await fetch("https://api.github.com/user", {
-        headers: {
-            Accept: "application/vnd.github+json",
-            Authorization: `Bearer ${accessToken}`,
-            "User-Agent": "nextjs-github-oauth",
-        },
-    });
+    const headers = {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${accessToken}`,
+        "User-Agent": "nextjs-github-oauth",
+    };
 
+    const res = await fetch("https://api.github.com/user", { headers });
     if (!res.ok) throw new Error(`GitHub /user failed: ${res.status}`);
-
     return res.json();
 }
 
@@ -65,8 +64,8 @@ export async function GET(req: NextRequest) {
     const url = new URL(req.url);
     const action = url.searchParams.get("action") ?? "login";
 
+    // ── Step 1: Redirect to GitHub ────────────────────────────────────────────
     if (action === "login") {
-        // Step 1: Redirect to GitHub
         const state = randomState();
         const authorizeUrl = new URL("https://github.com/login/oauth/authorize");
         authorizeUrl.searchParams.set("client_id", mustGetEnv("GITHUB_CLIENT_ID", GITHUB_CLIENT_ID));
@@ -80,23 +79,19 @@ export async function GET(req: NextRequest) {
             sameSite: "lax",
             secure: isProduction,
             path: "/",
-            maxAge: 10 * 60, // 10 minutes
+            maxAge: 10 * 60,
         });
 
         return res;
     }
 
+    // ── Step 2: OAuth callback ────────────────────────────────────────────────
     if (action === "callback") {
         const installationId = url.searchParams.get("installation_id");
-        const setupAction = url.searchParams.get("setup_action");
 
-        // 🟢 GITHUB APP INSTALL FLOW
+        // GitHub App install flow
         if (installationId) {
-            console.log("GitHub App installed:", installationId, setupAction);
-
-            const res = NextResponse.redirect("http://localhost:3000/");
-
-            // Optional: store installationId in cookie (temporary demo)
+            const res = NextResponse.redirect(`${APP_URL}/`);
             res.cookies.set("github_installation_id", installationId, {
                 httpOnly: true,
                 sameSite: "lax",
@@ -104,35 +99,34 @@ export async function GET(req: NextRequest) {
                 path: "/",
                 maxAge: 60 * 60 * 24 * 7,
             });
-
             return res;
         }
 
-        // 🔵 OAUTH LOGIN FLOW
+        // OAuth login flow
         const code = url.searchParams.get("code");
         const state = url.searchParams.get("state");
         const expectedState = req.cookies.get("oauth_state")?.value;
 
         if (!code || !state || state !== expectedState) {
-            return NextResponse.redirect("http://localhost:3000/login?error=state_mismatch");
+            return NextResponse.redirect(`${APP_URL}/auth?error=state_mismatch`);
         }
 
         try {
             const accessToken = await exchangeCodeForToken(code);
-            const user = await fetchGitHubUser(accessToken);
+            const githubUser = await fetchGitHubUser(accessToken);
 
-            const res = NextResponse.redirect("http://localhost:3000/");
-
-            res.cookies.set("oauth_state", "", { path: "/", maxAge: 0 });
+            console.log(githubUser);
 
             const sessionJWT = createJWT({
-                github_id: user.id,
-                login: user.login,
-                name: user.name,
-                email: user.email,
-                avatar_url: user.avatar_url,
+                github_id: githubUser.id,
+                login: githubUser.login,
+                name: githubUser.name,
+                email: githubUser.email,
+                avatar_url: githubUser.avatar_url,
             });
 
+            const res = NextResponse.redirect(`${APP_URL}/`);
+            res.cookies.set("oauth_state", "", { path: "/", maxAge: 0 });
             res.cookies.set("session", sessionJWT, {
                 httpOnly: true,
                 sameSite: "lax",
@@ -144,8 +138,9 @@ export async function GET(req: NextRequest) {
             return res;
         } catch (err) {
             console.error("GitHub OAuth callback error:", err);
-            return NextResponse.redirect("http://localhost:3000/login?error=oauth_failed");
+            return NextResponse.redirect(`${APP_URL}/auth?error=oauth_failed`);
         }
     }
-    return NextResponse.redirect("http://localhost:3000/login?error=invalid_action");
+
+    return NextResponse.redirect(`${APP_URL}/auth?error=invalid_action`);
 }

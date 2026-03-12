@@ -7,7 +7,7 @@ import { TestRun, TestRunStatus } from '@/types/nova';
 
 export default function TestDetailPage() {
     const params = useParams();
-    const repositoryId = params.repository_id;
+    const repositoryId = Number(params.repository_id);
     const testId = params.test_id as string;
     const router = useRouter();
 
@@ -72,7 +72,7 @@ export default function TestDetailPage() {
                                     {[
                                         { label: 'Status', value: run.status, color: run.status === 'running' ? 'text-blue-400' : run.status === 'completed' ? 'text-emerald-400' : 'text-rose-400' },
                                         { label: 'Agents', value: run.agents, color: 'text-[var(--foreground)]' },
-                                        { label: 'Faults Detected', value: run.faults, color: run.faults > 0 ? 'text-rose-500' : 'text-emerald-500' },
+                                        { label: 'Faults Detected', value: run.faults.length, color: run.faults.length > 0 ? 'text-rose-500' : 'text-emerald-500' },
                                     ].map((card) => (
                                         <div key={card.label} className="bg-[var(--surface)] rounded-xl p-4" style={{ border: '1px solid var(--border-subtle)' }}>
                                             <p className="text-xs text-[var(--muted)] font-mono uppercase tracking-wider mb-1">{card.label}</p>

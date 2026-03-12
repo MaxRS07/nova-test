@@ -7,8 +7,8 @@ import { useParams } from 'next/navigation';
 
 export default function RepositoryDashboard() {
   const params = useParams();
-  const repositoryId = params.repository_id;
-  const project = useProjects().getProject(Number(repositoryId));
+  const repositoryId = Number(params.repository_id);
+  const project = useProjects().getProject(repositoryId);
 
   if (!project) {
     return (
