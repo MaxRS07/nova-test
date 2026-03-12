@@ -18,6 +18,7 @@ export default function TestPage() {
 
     const [view, setView] = useState<'list' | 'new'>('list');
     const [testRuns, setTestRuns] = useState<TestRun[]>([]);
+    const [activeSockets, setActiveSockets] = useState<Record<string, any>>({});
 
     // Persist test runs to sessionStorage so the detail page can read them
     useEffect(() => {
@@ -119,6 +120,8 @@ export default function TestPage() {
             };
 
             setTestRuns(prev => [newRun, ...prev]);
+            // Store socket reference for this run
+            setActiveSockets(prev => ({ ...prev, [runId]: actSocket }));
 
             const startTime = Date.now();
 
@@ -160,6 +163,13 @@ export default function TestPage() {
                     console.error('Failed to save completed test run:', error);
                 });
 
+                // Clean up socket reference
+                setActiveSockets(prev => {
+                    const updated = { ...prev };
+                    delete updated[runId];
+                    return updated;
+                });
+
                 setIsLaunching(false);
             };
 
@@ -174,6 +184,13 @@ export default function TestPage() {
                 // Save failed test run to database
                 saveTestRun(failedRun).catch(err => {
                     console.error('Failed to save error test run:', err);
+                });
+
+                // Clean up socket reference
+                setActiveSockets(prev => {
+                    const updated = { ...prev };
+                    delete updated[runId];
+                    return updated;
                 });
 
                 setIsLaunching(false);
@@ -198,12 +215,30 @@ export default function TestPage() {
     };
 
     const handleDeleteTestRun = async (runId: string) => {
-        try {
-            await deleteTestRun(runId);
-            setTestRuns(prev => prev.filter(r => r.id !== runId));
-        } catch (error) {
-            console.error('Failed to delete test run:', error);
-            setLaunchError(`Failed to delete test run: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        const socket = activeSockets[runId];
+
+        if (socket && typeof socket.close === 'function') {
+            // Test is running - close the socket
+            try {
+                socket.close();
+                setActiveSockets(prev => {
+                    const updated = { ...prev };
+                    delete updated[runId];
+                    return updated;
+                });
+            } catch (error) {
+                console.error('Failed to close test run socket:', error);
+                setLaunchError(`Failed to stop test: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            }
+        } else {
+            // Test is not running - delete it
+            try {
+                await deleteTestRun(runId);
+                setTestRuns(prev => prev.filter(r => r.id !== runId));
+            } catch (error) {
+                console.error('Failed to delete test run:', error);
+                setLaunchError(`Failed to delete test run: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            }
         }
     };
 
@@ -285,9 +320,9 @@ export default function TestPage() {
                                                 key={run.id}
                                                 className="grid grid-cols-[1fr_1fr_0.8fr_1fr_1fr_0.8fr_0.5fr] px-6 py-4 hover:bg-[var(--muted-bg)] transition-colors items-center"
                                                 style={i < testRuns.length - 1 ? { borderBottom: '1px solid var(--border-subtle)' } : {}}
+                                                onClick={() => router.push(`/repository/${repositoryId}/test/${run.id}`)}
                                             >
                                                 <span
-                                                    onClick={() => router.push(`/repository/${repositoryId}/test/${run.id}`)}
                                                     className="font-mono text-sm text-[var(--foreground)] truncate pr-4 cursor-pointer hover:underline"
                                                     title={run.url}
                                                 >
@@ -303,10 +338,13 @@ export default function TestPage() {
                                                         e.stopPropagation();
                                                         handleDeleteTestRun(run.id);
                                                     }}
-                                                    className="px-2 py-1 text-xs font-mono text-red-500 hover:bg-red-500/10 rounded transition-colors"
-                                                    title="Delete test run"
+                                                    className={`px-2 py-1 text-xs font-mono rounded transition-colors ${run.status === 'running'
+                                                        ? 'text-amber-500 hover:bg-amber-500/10'
+                                                        : 'text-red-500 hover:bg-red-500/10'
+                                                        }`}
+                                                    title={run.status === 'running' ? 'Stop test run' : 'Delete test run'}
                                                 >
-                                                    ✕
+                                                    {run.status === 'running' ? '⊗' : '✕'}
                                                 </button>
                                             </div>
                                         ))

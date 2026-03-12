@@ -9,7 +9,9 @@ import logging
 import traceback
 from nova.types import Agent
 import time
-from guardrails import autopass_guardrail
+
+from nova_act.types.guardrail import GuardrailDecision
+from schemas.fault import Faults
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -63,7 +65,7 @@ class ActRunner:
                 nova_act_api_key=KEY,
                 starting_page=url,
                 human_input_callbacks=human_callback,
-                state_guardrail=autopass_guardrail,
+                state_guardrail=lambda state: GuardrailDecision.PASS
             )
             logger.info("Nova Act agent created successfully")
             return act
@@ -123,17 +125,36 @@ class ActRunner:
             
             subpages = []
             try:
-                _agent_config = agent_config[0]
-                agent = self.create_agent(url, human_callback, _agent_config)
+                use_agent = agent_config[0]
+                use_agent_config = use_agent.get("config", {})
+                
+                maxTokens = use_agent_config.get("maxTokens", 0)
+                temp = use_agent_config.get("temperature", 0.7)
+                model_top_P = use_agent_config.get("topP", 5)
+                
+                agent = self.create_agent(url, human_callback, use_agent)
                 self.nova = agent
                 
                 try:
                     with agent:
-                        for step in _agent_config.get("actions", []):
+                        for step in use_agent.get("actions", []):
                             step_start = time.time()
                             try:
-                                res = agent.act(step)
+                                res = agent.act_get(
+                                    step,
+                                    timeout=200,
+                                    model_seed=1,
+                                    model_top_k=model_top_P,
+                                    temperature=temp,
+                                    schema=Faults.model_json_schema()
+                                )
                                 results_queue.put(res.metadata)
+                                
+                                if res.matches_schema:
+                                    run_manager.send(self.run_id, {
+                                        "type": "fault",
+                                        "fault": res.parsed_response.dict(),
+                                    })
                                 
                                 if not agent.page.url.startswith(url):
                                     agent.go_to_url(url)
