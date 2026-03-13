@@ -4,17 +4,32 @@ import Sidebar from '@/components/Sidebar';
 import Topbar from '@/components/Topbar';
 import { useParams, useRouter } from 'next/navigation';
 import { TestRun, TestRunStatus } from '@/types/nova';
+import { useState, useEffect } from 'react';
 
 export default function TestDetailPage() {
     const params = useParams();
     const repositoryId = Number(params.repository_id);
     const testId = params.test_id as string;
     const router = useRouter();
+    const [outputTab, setOutputTab] = useState<'output' | 'thinking'>('output');
+    const [run, setRun] = useState<TestRun | null>(null);
 
-    // In a real app this would come from a shared store or API.
-    // For now we read from sessionStorage which the list page writes to.
-    const stored = typeof window !== 'undefined' ? sessionStorage.getItem(`test-run-${testId}`) : null;
-    const run = stored ? JSON.parse(stored) as TestRun : null;
+    useEffect(() => {
+        const read = () => {
+            const stored = sessionStorage.getItem(`test-run-${testId}`);
+            if (stored) setRun(JSON.parse(stored) as TestRun);
+        };
+        read();
+        // Poll while the run might still be active
+        const interval = setInterval(() => {
+            const stored = sessionStorage.getItem(`test-run-${testId}`);
+            if (!stored) return;
+            const parsed = JSON.parse(stored) as TestRun;
+            setRun(parsed);
+            if (parsed.status !== 'running') clearInterval(interval);
+        }, 1000);
+        return () => clearInterval(interval);
+    }, [testId]);
 
     const statusBadge = (status: TestRunStatus) => {
         const styles = {
@@ -95,7 +110,7 @@ export default function TestDetailPage() {
                                         </div>
                                         <div>
                                             <span className="text-[var(--muted)]">Started:</span>{' '}
-                                            <span className="text-[var(--foreground)]">{run.timestamp}</span>
+                                            <span className="text-[var(--foreground)]">{new Date(run.timestamp).toLocaleString()}</span>
                                         </div>
                                         {run.pages.length > 0 && (
                                             <div className="col-span-2">
@@ -113,7 +128,26 @@ export default function TestDetailPage() {
                                 {/* Output Log */}
                                 <div className="bg-[var(--surface)] rounded-xl overflow-hidden mb-8" style={{ border: '1px solid var(--border-subtle)' }}>
                                     <div className="px-6 py-4 bg-[var(--muted-bg)] flex items-center justify-between" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                                        <p className="text-xs font-mono text-[var(--muted)] uppercase tracking-wider">Output Log</p>
+                                        <div className="flex gap-4">
+                                            <button
+                                                onClick={() => setOutputTab('output')}
+                                                className={`text-xs font-mono uppercase tracking-wider pb-2 border-b-2 transition-colors ${outputTab === 'output'
+                                                    ? 'text-[var(--foreground)] border-[var(--accent)]'
+                                                    : 'text-[var(--muted)] border-transparent hover:text-[var(--foreground)]'
+                                                    }`}
+                                            >
+                                                Output Log
+                                            </button>
+                                            <button
+                                                onClick={() => setOutputTab('thinking')}
+                                                className={`text-xs font-mono uppercase tracking-wider pb-2 border-b-2 transition-colors ${outputTab === 'thinking'
+                                                    ? 'text-[var(--foreground)] border-[var(--accent)]'
+                                                    : 'text-[var(--muted)] border-transparent hover:text-[var(--foreground)]'
+                                                    }`}
+                                            >
+                                                Thinking Logs
+                                            </button>
+                                        </div>
                                         {run.status === 'running' && (
                                             <span className="text-xs font-mono text-blue-400 flex items-center gap-1.5">
                                                 <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
@@ -122,31 +156,82 @@ export default function TestDetailPage() {
                                         )}
                                     </div>
                                     <div className="p-6 max-h-96 overflow-y-auto">
-                                        {run.logs.length === 0 ? (
-                                            <p className="text-sm text-(--muted) font-mono">
-                                                {run.status === 'running' ? 'Waiting for output...' : 'No output recorded'}
-                                            </p>
+                                        {outputTab === 'output' ? (
+                                            run.logs.length === 0 ? (
+                                                <p className="text-sm text-(--muted) font-mono">
+                                                    {run.status === 'running' ? 'Waiting for output...' : 'No output recorded'}
+                                                </p>
+                                            ) : (
+                                                <div className="space-y-1">
+                                                    {run.logs.map((log, i) => {
+                                                        const color = log.startsWith('Error:') ? 'text-rose-500' : log.startsWith('Metadata:') ? 'text-blue-400' : 'text-[var(--muted)]';
+                                                        return (
+                                                            <div key={i} className={`text-xs font-mono ${color} leading-relaxed break-all flex flex-row`}>
+                                                                <span className={"font-mono text-(--foreground-soft) mr-2 select-none"}>
+                                                                    {String(i + 1)}
+                                                                </span>
+                                                                {log}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )
                                         ) : (
-                                            <div className="space-y-1">
-                                                {run.logs.map((log, i) => {
-                                                    const color = log.startsWith('Error:') ? 'text-rose-500' : log.startsWith('Metadata:') ? 'text-blue-400' : 'text-[var(--muted)]';
-                                                    return (
-                                                        <div key={i} className={`text-xs font-mono ${color} leading-relaxed break-all flex flex-row`}>
+                                            (run as any).thinking && (run as any).thinking.length > 0 ? (
+                                                <div className="space-y-1">
+                                                    {(run as any).thinking.map((thought: string, i: number) => (
+                                                        <div key={i} className="text-xs font-mono text-[var(--muted)] leading-relaxed break-all flex flex-row">
                                                             <span className={"font-mono text-(--foreground-soft) mr-2 select-none"}>
                                                                 {String(i + 1)}
                                                             </span>
-                                                            {log}
+                                                            {thought}
                                                         </div>
-                                                    );
-                                                })}
-                                            </div>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <p className="text-sm text-(--muted) font-mono">
+                                                    {run.status === 'running' ? 'Waiting for thinking logs...' : 'No thinking logs recorded'}
+                                                </p>
+                                            )
                                         )}
                                     </div>
                                 </div>
+
+                                {/* Faults Section */}
+                                <div className="bg-[var(--surface)] rounded-xl overflow-hidden mb-8" style={{ border: '1px solid var(--border-subtle)' }}>
+                                    <div className="px-6 py-4 bg-[var(--muted-bg)]" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                                        <p className="text-xs font-mono text-[var(--muted)] uppercase tracking-wider">Faults</p>
+                                    </div>
+                                    <div className="p-6">
+                                        {run.faults && run.faults.length > 0 ? (
+                                            <div className="space-y-4">
+                                                {run.faults.map((fault, i) => (
+                                                    <div key={i} className="border-l-2 border-rose-500 pl-4">
+                                                        <div className="mb-1">
+                                                            <span className="text-xs font-mono text-rose-500 uppercase tracking-wider">{fault.type}</span>
+                                                        </div>
+                                                        <p className="text-sm font-mono text-[var(--foreground)] mb-2">{fault.message}</p>
+                                                        {fault.traceback && (
+                                                            <details className="text-xs font-mono text-[var(--muted)]">
+                                                                <summary className="cursor-pointer hover:text-[var(--foreground)] transition-colors">View Traceback</summary>
+                                                                <pre className="mt-2 bg-[var(--surface)] rounded p-2 overflow-x-auto text-xs font-mono text-[var(--muted-text)] whitespace-pre-wrap break-words">
+                                                                    {fault.traceback}
+                                                                </pre>
+                                                            </details>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <p className="text-sm text-[var(--muted)] font-mono">No faults detected by the agent</p>
+                                        )}
+                                    </div>
+                                </div>
+
                                 { /* Git Revision */}
-                                <div className="bg-(--surface) rounded-xl overflow-hidden" style={{ border: '1px solid var(--border-subtle)' }}>
-                                    <div className="px-6 py-4 bg-(--muted-bg) flex items-center justify-between" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                                        <p className="text-xs font-mono text-(--muted) uppercase tracking-wider">git revision</p>
+                                <div className="bg-[var(--surface)] rounded-xl overflow-hidden" style={{ border: '1px solid var(--border-subtle)' }}>
+                                    <div className="px-6 py-4 bg-[var(--muted-bg)] flex items-center justify-between" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                                        <p className="text-xs font-mono text-[var(--muted)] uppercase tracking-wider">git revision</p>
                                     </div>
                                     <div className="p-6" />
                                 </div>

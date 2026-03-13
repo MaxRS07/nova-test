@@ -31,17 +31,30 @@ class ActSocket {
     public act_started: boolean = false;
 
     private run_id: string;
+    private _closedBeforeCallback = false;
+    private _errorBeforeCallback: any = undefined;
 
     // Public callbacks for UI to subscribe to
     public onApprovalRequest?: (message: string) => Promise<boolean>;
     public onMetadataUpdate?: (metadata: ActMetadata) => void;
     public onActUpdate?: (update: any, metadata: ActMetadata) => void;
     public onOpen?: () => void;
-    public onClose?: () => void;
     public onError?: (error: any) => void;
 
     public onPageError?: (page: string, errors: any) => void;
     public onFault?: (fault: Fault[]) => void;
+    public onThinking?: (message: string) => void;
+
+    // Deliver close immediately if already fired, otherwise buffer it
+    private _onClose?: () => void;
+    public get onClose() { return this._onClose; }
+    public set onClose(cb: (() => void) | undefined) {
+        this._onClose = cb;
+        if (this._closedBeforeCallback && cb) {
+            this._closedBeforeCallback = false;
+            cb();
+        }
+    }
 
     constructor(run_id: string) {
         this.socket = new WebSocket(`ws://localhost:8000/ws/run/${run_id}`);
@@ -57,7 +70,12 @@ class ActSocket {
         };
 
         this.socket.onclose = () => {
-            if (this.onClose) this.onClose();
+            if (this._onClose) {
+                this._onClose();
+            } else {
+                // Callback not yet assigned — buffer the event
+                this._closedBeforeCallback = true;
+            }
         };
 
         this.socket.onmessage = async (event) => {
@@ -108,8 +126,18 @@ class ActSocket {
                 case 'fault':
                     this.onFault?.(data.fault);
                     break;
+                case 'thinking':
+                    if (this.onThinking) {
+                        this.onThinking(data.message);
+                    }
+                    break;
+                case 'log':
+                    if (this.onThinking) {
+                        this.onThinking(data.message);
+                    }
+                    break;
                 default:
-                    console.log("Received message:", data);
+                    console.warn("Unknown message type:", data.type);
             }
         };
     }

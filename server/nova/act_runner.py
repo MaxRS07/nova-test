@@ -1,19 +1,20 @@
-from nova_act import NovaAct, Workflow, ActMetadata
-from nova_act.tools.human.interface.human_input_callback import (
-    ApprovalResponse, HumanInputCallbacksBase, UiTakeoverResponse,
-)
-from dotenv import load_dotenv
-from typing import AsyncGenerator, Optional
-import os
+import asyncio
+import contextlib
 import logging
-import traceback
-from nova.types import Agent
+import os
+import queue
+import threading
 import time
+import traceback
+from typing import AsyncGenerator, Optional
 
-from nova_act.types.guardrail import GuardrailDecision
+from nova_act import ActMetadata
+
+from nova.agent_factory import create_agent
+from nova.log_handler import WsLogHandler, WsStdoutCapture
 from nova.schemas.fault import Faults
+from nova.types import Agent
 
-# Configure logging
 logger = logging.getLogger(__name__)
 
 KEY = os.getenv("NOVA_ACT_API_KEY")
@@ -24,232 +25,171 @@ if not KEY:
 
 class ActRunner:
     """Manages Nova Act agent execution with optional WebSocket integration."""
-    
+
     def __init__(self, run_id: Optional[str] = None):
-        """
-        Initialize ActRunner.
-        
-        Args:
-            run_id: Optional run ID for WebSocket-based approval integration
-        """
         self.run_id = run_id
         self.nova = None
-    
-    @staticmethod
-    def create_agent(
-        url: str,
-        human_callback: Optional[HumanInputCallbacksBase] = None,
-        agent_config: Optional[Agent] = None
-    ) -> NovaAct:
-        """
-        Create a Nova Act agent with optional human callback for approvals.
-        
-        Args:
-            url: Starting page URL
-            context: Agent context/instructions
-            human_callback: Optional callback for human approval handling
-            
-        Returns:
-            NovaAct: Initialized Nova Act agent
-            
-        Raises:
-            ValueError: If API key is missing
-            Exception: If agent creation fails
-        """
-        try:
-            if not KEY:
-                raise ValueError("NOVA_ACT_API_KEY environment variable is not set")
-            
-            logger.info(f"Creating Nova Act agent for URL: {url}")
-            act = NovaAct(
-                nova_act_api_key=KEY,
-                starting_page=url,
-                human_input_callbacks=human_callback,
-                state_guardrail=lambda state: GuardrailDecision.PASS
-            )
-            logger.info("Nova Act agent created successfully")
-            return act
-        except ValueError as ve:
-            logger.error(f"Configuration error: {str(ve)}")
-            raise
-        except Exception as e:
-            logger.error(f"Error creating Nova Act agent: {str(e)}")
-            logger.debug(traceback.format_exc())
-            raise Exception(f"Failed to create Nova Act agent: {str(e)}")
-    
+
     async def run_act(
         self,
         url: str,
         pages: list[str],
-        agent_config: list[Agent]
-    ) -> AsyncGenerator[ActMetadata]:
+        agent_config: list[Agent],
+    ) -> AsyncGenerator[ActMetadata, None]:
         """
         Run Nova Act workflow with optional WebSocket-based approval handling.
-        
-        Args:
-            url: Starting URL for the browser
-            context: Agent context/instructions
-            *steps: Variable number of steps/actions to execute
-            
+
         Yields:
             ActMetadata for each step executed
-            
-        Raises:
-            Exception: If the act fails or times out, with detailed error message
         """
-        import asyncio
-        import queue
-        import threading
-        import traceback
-
         results_queue: queue.Queue = queue.Queue()
         loop = asyncio.get_running_loop()
 
-        # Import here to avoid circular imports
+        # Human approval callback
         if self.run_id:
             from nova.callbacks.stream_callback import StreamInputCallback
             human_callback = StreamInputCallback(self.run_id, loop)
         else:
             human_callback = None
+
+        ws_handler = WsLogHandler(self.run_id, loop) if self.run_id else None
+        ws_stdout = WsStdoutCapture(self.run_id, loop) if self.run_id else None
         error_occurred = False
 
+        def _send(payload: dict):
+            """Fire-and-forget send from sync thread to the async event loop."""
+            from websocket_manager import run_manager
+            asyncio.run_coroutine_threadsafe(run_manager.send(self.run_id, payload), loop)
+
         def run_sync():
-            """Run NovaAct in a thread with no event loop so Playwright sync API works."""
             nonlocal error_occurred
-            
+
+            if ws_handler:
+                logging.getLogger("nova_act").addHandler(ws_handler)
+
             # Ensure this thread has no event loop (safety for Python 3.10+)
             try:
                 asyncio.set_event_loop(None)
             except Exception:
                 pass
-            
-            try:
-                use_agent = agent_config[0]
-                use_agent_config = use_agent.get("config", {})
-                
-                maxTokens = use_agent_config.get("maxTokens", 0)
-                temp = use_agent_config.get("temperature", 0.7)
-                model_top_P = use_agent_config.get("topP", 5)
-                
-                agent = self.create_agent(url, human_callback, use_agent)
-                self.nova = agent
-                
+
+            # Capture NovaAct stdout prints and forward them over the socket
+            stdout_ctx = ws_stdout if ws_stdout else contextlib.nullcontext()
+
+            with stdout_ctx:
                 try:
-                    with agent:
-                        for step in use_agent.get("actions", []):
-                            step_start = time.time()
-                            try:
-                                res = agent.act_get(
-                                    step,
-                                    max_steps=10,
-                                    timeout=200,
-                                    model_seed=1,
-                                    model_top_k=model_top_P,
-                                    model_temperature=temp,
-                                    schema=Faults.model_json_schema()
-                                )
-                                results_queue.put(res.metadata)
-                                
-                                if res.matches_schema:
-                                    from websocket_manager import run_manager
-                                    run_manager.send(self.run_id, {
-                                        "type": "fault",
-                                        "fault": res.parsed_response,
-                                    })
-                                
-                                if not agent.page.url.startswith(url):
-                                    agent.go_to_url(url)
-                                    if errors := agent.page.page_errors():
-                                        from websocket_manager import run_manager
-                                        run_manager.send(self.run_id, {
-                                            "type": "page_error",
-                                            "page": agent.page.url,
-                                            "errors": errors,
-                                        })
-                                        
-                            except Exception as step_error:
-                                error_occurred = True
-                                error_msg = f"Error executing step '{step}': {str(step_error)}"
-                                logger.error(error_msg)
-                                logger.debug(traceback.format_exc())
-                                results_queue.put(Exception(error_msg))
-                                break
-                            finally:
-                                step_end = time.time()
-                                logger.info(f"Step '{step}' completed in {step_end - step_start:.2f} seconds")
-                except Exception as agent_error:
+                    use_agent = agent_config[0]
+                    use_agent_config = use_agent.get("config", {})
+
+                    temp = use_agent_config.get("temperature", 0.7)
+                    model_top_P = use_agent_config.get("topP", 5)
+
+                    agent = create_agent(url, human_callback, use_agent)
+                    self.nova = agent
+
+                    try:
+                        with agent:
+                            for step in use_agent.get("actions", []):
+                                step_start = time.time()
+                                try:
+                                    res = agent.act_get(
+                                        step,
+                                        max_steps=10,
+                                        timeout=200,
+                                        model_seed=1,
+                                        model_top_k=model_top_P,
+                                        model_temperature=temp,
+                                        schema=Faults.model_json_schema(),
+                                    )
+                                    results_queue.put(res.metadata)
+
+                                    if res.matches_schema:
+                                        _send({"type": "fault", "fault": res.parsed_response})
+
+                                    if not agent.page.url.startswith(url):
+                                        agent.go_to_url(url)
+                                        if errors := agent.page.page_errors():
+                                            _send({
+                                                "type": "page_error",
+                                                "page": agent.page.url,
+                                                "errors": errors,
+                                            })
+
+                                except Exception as step_error:
+                                    error_occurred = True
+                                    error_msg = f"Error executing step '{step}': {str(step_error)}"
+                                    logger.error(error_msg)
+                                    logger.debug(traceback.format_exc())
+                                    results_queue.put(Exception(error_msg))
+                                    break
+                                finally:
+                                    step_end = time.time()
+                                    logger.info(f"Step '{step}' completed in {step_end - step_start:.2f} seconds")
+
+                    except Exception as agent_error:
+                        error_occurred = True
+                        error_msg = f"Error during agent execution: {str(agent_error)}"
+                        logger.error(error_msg)
+                        logger.debug(traceback.format_exc())
+                        results_queue.put(Exception(error_msg))
+
+                except Exception as init_error:
                     error_occurred = True
-                    error_msg = f"Error during agent execution: {str(agent_error)}"
+                    error_msg = f"Error initializing Nova Act agent: {str(init_error)}"
                     logger.error(error_msg)
                     logger.debug(traceback.format_exc())
                     results_queue.put(Exception(error_msg))
-            except Exception as init_error:
-                error_occurred = True
-                error_msg = f"Error initializing Nova Act agent: {str(init_error)}"
-                logger.error(error_msg)
-                logger.debug(traceback.format_exc())
-                results_queue.put(Exception(error_msg))
-            finally:
-                # Always cleanup the agent properly
-                if self.nova:
-                    try:
-                        if hasattr(self.nova, 'close'):
-                            self.nova.close()
-                    except Exception as cleanup_error:
-                        logger.warning(f"Error closing Nova agent: {str(cleanup_error)}")
-                
-                self.nova = None
-                results_queue.put(None)  # sentinel
 
-        # Spin up a real thread (not executor) so we control the event loop context
+                finally:
+                    if ws_handler:
+                        logging.getLogger("nova_act").removeHandler(ws_handler)
+
+                    if self.nova:
+                        try:
+                            if hasattr(self.nova, "close"):
+                                self.nova.close()
+                        except Exception as cleanup_error:
+                            logger.warning(f"Error closing Nova agent: {str(cleanup_error)}")
+
+                    self.nova = None
+                    results_queue.put(None)  # sentinel
+
         thread = threading.Thread(target=run_sync, daemon=True)
         thread.start()
 
         try:
             while True:
-                # Unblock get() in executor so we don't block the event loop
                 item = await loop.run_in_executor(None, results_queue.get)
 
-                if item is None:  # sentinel — done
+                if item is None:
                     break
                 if isinstance(item, Exception):
-                    # Close websocket via run_manager if available
                     if self.run_id:
                         try:
                             from websocket_manager import run_manager
-                            await run_manager.emit(
-                                self.run_id, 
-                                "error", 
-                                {"error": str(item)}
-                            )
+                            await run_manager.emit(self.run_id, "error", {"error": str(item)})
                         except Exception as ws_error:
                             logger.warning(f"Failed to send error to websocket: {str(ws_error)}")
                     raise item
                 yield item
+
         except Exception as exec_error:
-            # Log the error and ensure websocket is notified
             error_msg = f"Error during act execution: {str(exec_error)}"
             logger.error(error_msg)
             logger.debug(traceback.format_exc())
-            
+
             if self.run_id:
                 try:
                     from websocket_manager import run_manager
-                    await run_manager.emit(
-                        self.run_id, 
-                        "error", 
-                        {"error": error_msg}
-                    )
+                    await run_manager.emit(self.run_id, "error", {"error": error_msg})
                 except Exception as ws_error:
                     logger.warning(f"Failed to send error to websocket: {str(ws_error)}")
-            
             raise
+
         finally:
-            # Wait for thread to finish cleanly
             try:
                 await asyncio.wait_for(loop.run_in_executor(None, thread.join), timeout=10)
             except asyncio.TimeoutError:
                 logger.warning("Timeout waiting for thread to finish")
             except Exception as join_error:
                 logger.warning(f"Error waiting for thread to finish: {str(join_error)}")
-            

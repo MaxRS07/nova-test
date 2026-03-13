@@ -19,6 +19,7 @@ export default function TestPage() {
     const [view, setView] = useState<'list' | 'new'>('list');
     const [testRuns, setTestRuns] = useState<TestRun[]>([]);
     const [activeSockets, setActiveSockets] = useState<Record<string, any>>({});
+    const [isLoadingTests, setIsLoadingTests] = useState(true);
 
     // Persist test runs to sessionStorage so the detail page can read them
     useEffect(() => {
@@ -42,10 +43,13 @@ export default function TestPage() {
     useEffect(() => {
         const loadTestRuns = async () => {
             try {
+                setIsLoadingTests(true);
                 const runs = await getTestRuns(repositoryId);
                 setTestRuns(runs);
             } catch (error) {
                 console.error('Failed to load test runs:', error);
+            } finally {
+                setIsLoadingTests(false);
             }
         };
 
@@ -113,10 +117,11 @@ export default function TestPage() {
                 agents: agentCount,
                 userAgents: [...userAgents],
                 status: 'running',
-                timestamp: new Date().toLocaleString(),
+                timestamp: new Date().toISOString(),
                 faults: [],
                 duration: '—',
                 logs: [],
+                thinking: []
             };
 
             setTestRuns(prev => [newRun, ...prev]);
@@ -152,9 +157,24 @@ export default function TestPage() {
             };
 
             actSocket.onFault = (faults) => {
-                setTestRuns(prev => prev.map(r =>
-                    r.id === runId ? { ...r, faults: [...r.faults, ...faults] } : r
-                ));
+                if (Array.isArray(faults)) {
+                    setTestRuns(prev => prev.map(r =>
+                        r.id === runId ? { ...r, faults: [...r.faults, ...faults] } : r
+                    ));
+                    return
+                }
+                console.log("Fault:", faults);
+            };
+
+            actSocket.onThinking = (message) => {
+                console.log(message);
+                setTestRuns(prev => prev.map(r => {
+                    if (r.id !== runId) return r;
+                    // Skip exact duplicates of the last entry (e.g. repeated spinner updates)
+                    const last = r.thinking[r.thinking.length - 1];
+                    if (last === message) return r;
+                    return { ...r, thinking: [...r.thinking, message] };
+                }));
             };
 
             actSocket.onClose = () => {
@@ -184,6 +204,7 @@ export default function TestPage() {
                     delete updated[runId];
                     return updated;
                 });
+
 
                 setIsLaunching(false);
             };
@@ -332,7 +353,23 @@ export default function TestPage() {
                                             <span key={col} className="text-xs font-mono text-[var(--muted)] uppercase tracking-wider">{col}</span>
                                         ))}
                                     </div>
-                                    {testRuns.length === 0 ? (
+                                    {isLoadingTests ? (
+                                        <div className="px-6 py-16">
+                                            <div className="space-y-3">
+                                                {[...Array(3)].map((_, i) => (
+                                                    <div key={i} className="grid grid-cols-[1fr_1fr_0.8fr_1fr_1fr_0.8fr_0.5fr] gap-4">
+                                                        <div className="h-5 bg-[var(--muted-bg)] rounded animate-pulse" />
+                                                        <div className="h-5 bg-[var(--muted-bg)] rounded animate-pulse" />
+                                                        <div className="h-5 bg-[var(--muted-bg)] rounded animate-pulse" />
+                                                        <div className="h-5 bg-[var(--muted-bg)] rounded animate-pulse" />
+                                                        <div className="h-5 bg-[var(--muted-bg)] rounded animate-pulse" />
+                                                        <div className="h-5 bg-[var(--muted-bg)] rounded animate-pulse" />
+                                                        <div className="h-5 bg-[var(--muted-bg)] rounded animate-pulse" />
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ) : testRuns.length === 0 ? (
                                         <div className="px-6 py-16 text-center">
                                             <p className="text-sm text-[var(--muted)] font-mono mb-1">No test runs yet</p>
                                             <p className="text-xs text-[var(--muted)] font-mono">Click &quot;New Test&quot; to launch your first test fleet</p>
@@ -354,7 +391,7 @@ export default function TestPage() {
                                                 <span>{statusBadge(run.status)}</span>
                                                 <span className="font-mono text-sm text-[var(--foreground)]">{run.agents}</span>
                                                 <span className={`font-mono text-sm ${run.faults.length > 0 ? 'text-rose-500' : 'text-emerald-500'}`}>{run.faults.length}</span>
-                                                <span className="font-mono text-sm text-[var(--foreground-soft)]">{run.timestamp}</span>
+                                                <span className="font-mono text-sm text-[var(--foreground-soft)]">{new Date(run.timestamp).toLocaleString()}</span>
                                                 <span className="font-mono text-sm text-[var(--muted)]">{run.duration}</span>
                                                 <button
                                                     onClick={(e) => {
@@ -555,7 +592,7 @@ export default function TestPage() {
                                     <button
                                         onClick={handleLaunchTests}
                                         disabled={isLaunching || !isValidUrl(testUrl) || Object.keys(formErrors).length > 0}
-                                        className={`w-full py-3 rounded-lg font-semibold transition-all border ${isLaunching || !isValidUrl(testUrl) || Object.keys(formErrors).length > 0
+                                        className={`w-full py-3 rounded-lg font-semibold transition-all border flex items-center justify-center gap-2 ${isLaunching || !isValidUrl(testUrl) || Object.keys(formErrors).length > 0
                                             ? 'text-[var(--muted)] cursor-not-allowed border-[var(--muted)]'
                                             : 'text-white hover:shadow-lg hover:cursor-pointer '
                                             }`}
@@ -563,6 +600,9 @@ export default function TestPage() {
                                             ? { borderColor: 'var(--border)' }
                                             : { borderColor: 'var(--muted)' }}
                                     >
+                                        {isLaunching && (
+                                            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                        )}
                                         {isLaunching ? 'Launching Test Fleet...' : 'Launch Test Fleet'}
                                     </button>
                                 </div>

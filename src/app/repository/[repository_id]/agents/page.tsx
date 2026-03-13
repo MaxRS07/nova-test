@@ -79,11 +79,28 @@ export default function AgentsPage() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {agents.map((agent) => (
+                                        {isLoading ? (
+                                            [...Array(3)].map((_, i) => (
+                                                <tr key={i} className="border-t border-[var(--muted-bg)]" style={{ borderColor: 'var(--muted-bg)' }}>
+                                                    <td className="px-6 py-4">
+                                                        <div className="h-5 bg-[var(--muted-bg)] rounded animate-pulse w-32" />
+                                                    </td>
+                                                    <td className="px-6 py-4">
+                                                        <div className="h-5 bg-[var(--muted-bg)] rounded animate-pulse w-48" />
+                                                    </td>
+                                                    <td className="px-6 py-4">
+                                                        <div className="h-5 bg-[var(--muted-bg)] rounded animate-pulse w-24" />
+                                                    </td>
+                                                    <td className="px-6 py-4">
+                                                        <div className="h-5 bg-[var(--muted-bg)] rounded animate-pulse w-16" />
+                                                    </td>
+                                                </tr>
+                                            ))
+                                        ) : agents.map((agent) => (
                                             <tr
                                                 key={agent.id}
                                                 onClick={() => router.push(`/repository/${repositoryId}/agents/${agent.id}`)}
-                                                className="hover:bg-[var(--muted-bg)] transition-colors border-t border-[var(--muted-bg)] cursor-pointer"
+                                                className="hover:bg-(--muted-bg) transition-colors border-t border-[var(--muted-bg)] cursor-pointer"
                                                 style={{ borderColor: 'var(--muted-bg)' }}
                                             >
                                                 <td className="px-6 py-4">

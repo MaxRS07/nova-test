@@ -42,6 +42,7 @@ export type TestRun = {
     faults: Fault[];
     duration: string;
     logs: string[];
+    thinking: string[];
 }
 
 export interface Agent {

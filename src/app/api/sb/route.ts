@@ -67,10 +67,11 @@ function testRunToRow(run: TestRun, userId: string) {
         agents: run.agents,
         user_agents: run.userAgents,
         status: run.status,
-        timestamp: run.timestamp,
+        timestamp: new Date(run.timestamp).toISOString(),
         faults: run.faults,
         duration: run.duration ?? null,
         logs: run.logs,
+        thinking: (run as any).thinking ?? [],
     };
 }
 
@@ -85,10 +86,11 @@ function rowToTestRun(row: Record<string, any>): TestRun {
         agents: row.agents,
         userAgents: row.user_agents,
         status: row.status,
-        timestamp: row.timestamp,
+        timestamp: row.timestamp ? new Date(row.timestamp).toLocaleString() : '',
         faults: row.faults,
         duration: row.duration,
-        logs: row.logs,
+        logs: row.logs ?? [],
+        thinking: row.thinking ?? [],
     };
 }
 
