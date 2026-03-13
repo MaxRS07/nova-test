@@ -14,7 +14,16 @@ class WsLogHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord):
         msg = self.format(record)
-        self._send(msg, record.levelname)
+        # Strip ANSI escape codes, carriage returns, and whitespace
+        cleaned = msg.replace("\r", "").strip()
+        # Skip lines that are only dots, spaces, or emoji (Thinker animation frames)
+        if not cleaned or not any(c.isalpha() or c.isdigit() for c in cleaned):
+            return
+        # Skip lines that are purely dots with optional prefix (e.g. "ef7a> ...")
+        text_after_prefix = cleaned.split(">", 1)[-1].strip() if ">" in cleaned else cleaned
+        if not text_after_prefix or set(text_after_prefix) <= {".", " "}:
+            return
+        self._send(cleaned, record.levelname)
 
     def _send(self, message: str, level: str = "INFO"):
         try:
@@ -34,10 +43,9 @@ class WsLogHandler(logging.Handler):
 class WsStdoutCapture:
     """
     Replaces sys.stdout in the nova_act thread so that NovaAct's direct
-    print() output (e.g. "ef7a> think(...)") is forwarded over WebSocket
-    instead of (or in addition to) the terminal.
-    Buffers partial writes and only sends complete lines that contain
-    alphanumeric text, preventing duplicate/emoji-only loading-dot updates.
+    print() output is forwarded over WebSocket instead of (or in addition to)
+    the terminal. Buffers partial writes and only sends complete lines that
+    contain alphanumeric text, preventing duplicate/emoji-only spinner updates.
     """
 
     def __init__(self, run_id: str, loop: asyncio.AbstractEventLoop, passthrough: bool = False):
@@ -52,25 +60,30 @@ class WsStdoutCapture:
 
     def _emit_line(self, line: str):
         stripped = line.strip()
-        if stripped and self._has_text(stripped):
-            try:
-                from websocket_manager import run_manager
-                asyncio.run_coroutine_threadsafe(
-                    run_manager.send(self.run_id, {
-                        "type": "log",
-                        "level": "INFO",
-                        "message": stripped,
-                    }),
-                    self.loop,
-                )
-            except Exception:
-                pass
+        if not stripped or not self._has_text(stripped):
+            return
+        # Skip pure dot-animation lines (e.g. "ef7a> ..." or "ef7a> ..")
+        text_after_prefix = stripped.split(">", 1)[-1].strip() if ">" in stripped else stripped
+        if not text_after_prefix or set(text_after_prefix) <= {".", " "}:
+            return
+        try:
+            from websocket_manager import run_manager
+            asyncio.run_coroutine_threadsafe(
+                run_manager.send(self.run_id, {
+                    "type": "log",
+                    "level": "INFO",
+                    "message": stripped,
+                }),
+                self.loop,
+            )
+        except Exception:
+            pass
 
     def write(self, text: str):
         if self.passthrough:
             self._original.write(text)
-        # Carriage returns are used by spinners to overwrite the current line —
-        # treat them as line terminators so we discard partial/duplicate updates.
+        # Carriage returns overwrite the current line in terminals — treat as
+        # line terminators so spinner frames are processed and discarded.
         text = text.replace("\r", "\n")
         self._buffer += text
         while "\n" in self._buffer:
@@ -80,7 +93,6 @@ class WsStdoutCapture:
     def flush(self):
         if self.passthrough:
             self._original.flush()
-        # Flush any remaining buffered content that never got a newline
         if self._buffer:
             self._emit_line(self._buffer)
             self._buffer = ""

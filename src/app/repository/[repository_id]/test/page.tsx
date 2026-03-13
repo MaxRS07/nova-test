@@ -170,9 +170,8 @@ export default function TestPage() {
                 console.log(message);
                 setTestRuns(prev => prev.map(r => {
                     if (r.id !== runId) return r;
-                    // Skip exact duplicates of the last entry (e.g. repeated spinner updates)
                     const last = r.thinking[r.thinking.length - 1];
-                    if (last === message) return r;
+                    if (last && last[0] === message[0] && "💭👀🎬⏱️".includes(last[0])) return r;
                     return { ...r, thinking: [...r.thinking, message] };
                 }));
             };
