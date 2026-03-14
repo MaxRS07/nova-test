@@ -27,7 +27,7 @@ export type ActRequestBody = {
     agent_config: Agent[];
 }
 
-export type TestRunStatus = 'running' | 'completed' | 'failed';
+export type TestRunStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 
 export type TestRun = {
     id: string;

@@ -200,7 +200,7 @@ export default function TestPage() {
         const socket = activeSockets[runId];
 
         if (socket) {
-            // Running — cancel and mark failed
+            // Running — cancel and mark cancelled
             try {
                 socket.cancel?.();
                 socket.close?.();
@@ -209,7 +209,7 @@ export default function TestPage() {
             }
             setTestRuns(prev => {
                 const next = prev.map(r =>
-                    r.id === runId ? { ...r, status: 'failed' as const } : r
+                    r.id === runId ? { ...r, status: 'cancelled' as const } : r
                 );
                 const run = next.find(r => r.id === runId);
                 if (run) saveTestRun(run).catch(console.error);

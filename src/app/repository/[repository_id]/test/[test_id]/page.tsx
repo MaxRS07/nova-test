@@ -36,6 +36,7 @@ export default function TestDetailPage() {
             running: 'bg-blue-500/15 text-blue-400',
             completed: 'bg-emerald-500/15 text-emerald-400',
             failed: 'bg-rose-500/15 text-rose-400',
+            cancelled: 'bg-rose-500/15 text-rose-400',
         };
         return (
             <span className={`px-2.5 py-1 rounded text-xs font-mono ${styles[status]}`}>
