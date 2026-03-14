@@ -171,7 +171,18 @@ export default function TestPage() {
                 setTestRuns(prev => prev.map(r => {
                     if (r.id !== runId) return r;
                     const last = r.thinking[r.thinking.length - 1];
-                    if (last && last[0] === message[0] && "💭👀🎬⏱️".includes(last[0])) return r;
+
+                    // Filter out duplicate lines with same emoji but different loading symbols
+                    if (last) {
+                        const currentMatch = message.match(/\*> (.)/);
+                        const lastMatch = last.match(/\*> (.)/);
+
+                        // Skip if same emoji (different loading state)
+                        if (currentMatch && lastMatch && currentMatch[1] === lastMatch[1]) {
+                            return r;
+                        }
+                    }
+
                     return { ...r, thinking: [...r.thinking, message] };
                 }));
             };

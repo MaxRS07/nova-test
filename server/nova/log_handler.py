@@ -3,29 +3,104 @@ import logging
 import sys
 
 
+class _StickyHandlerLogger(logging.Logger):
+    """
+    A Logger subclass that keeps a set of "sticky" handlers that cannot be
+    removed by direct assignment to `.handlers`. This is used to survive
+    nova_act's Thinker class, which does `self.logger.handlers = [self.handler]`
+    to take over the logger during its dot-animation, which would otherwise
+    eject our WsLogHandler.
+    """
+
+    def __init__(self, name, level=logging.NOTSET):
+        self._sticky_handlers: list[logging.Handler] = []
+        super().__init__(name, level)
+
+    def add_sticky_handler(self, handler: logging.Handler):
+        self._sticky_handlers.append(handler)
+        if handler not in self.handlers:
+            self.handlers.append(handler)
+
+    def remove_sticky_handler(self, handler: logging.Handler):
+        if handler in self._sticky_handlers:
+            self._sticky_handlers.remove(handler)
+        if handler in self.handlers:
+            self.handlers.remove(handler)
+
+    @property  # type: ignore[override]
+    def handlers(self):
+        return self.__dict__.setdefault("_handlers", [])
+
+    @handlers.setter
+    def handlers(self, value):
+        # Re-inject any sticky handlers that aren't in the new list
+        merged = list(value)
+        for h in self._sticky_handlers:
+            if h not in merged:
+                merged.append(h)
+        self.__dict__["_handlers"] = merged
+
+
+def _ensure_sticky_logger(logger_name: str) -> "_StickyHandlerLogger":
+    """
+    Replace the named logger with a _StickyHandlerLogger instance, preserving
+    existing handlers and settings. Safe to call multiple times.
+    """
+    existing = logging.getLogger(logger_name)
+    if isinstance(existing, _StickyHandlerLogger):
+        return existing
+
+    sticky = _StickyHandlerLogger(logger_name, existing.level)
+    sticky.handlers = list(existing.handlers)
+    sticky.propagate = existing.propagate
+    logging.Logger.manager.loggerDict[logger_name] = sticky
+    return sticky
+
+
+def _is_animation_frame(msg: str) -> bool:
+    """Return True if the message is a Thinker dot-animation frame (no real content)."""
+    # Strip carriage returns and whitespace
+    cleaned = msg.replace("\r", "").strip()
+    if not cleaned:
+        return True
+    # Everything after the "a1b7> " prefix
+    text = cleaned.split(">", 1)[-1].strip() if ">" in cleaned else cleaned
+    # Animation frames are empty or contain only dots
+    return not text or set(text) <= {".", " "}
+
+
 class WsLogHandler(logging.Handler):
-    """Forwards nova_act log records to the client via run_manager over WebSocket."""
+    """
+    Forwards nova_act log records to the client via run_manager over WebSocket.
+    Attaches itself as a sticky handler so it survives Thinker's handler swap.
+    """
 
     def __init__(self, run_id: str, loop: asyncio.AbstractEventLoop):
         super().__init__()
         self.run_id = run_id
         self.loop = loop
-        self.setFormatter(logging.Formatter("%(name)s: %(message)s"))
+        self.setFormatter(logging.Formatter("%(message)s"))
+        self._sticky_logger: "_StickyHandlerLogger | None" = None
+
+    def attach(self, logger_name: str):
+        sticky = _ensure_sticky_logger(logger_name)
+        sticky.add_sticky_handler(self)
+        self._sticky_logger = sticky
+
+    def detach(self):
+        if self._sticky_logger is not None:
+            self._sticky_logger.remove_sticky_handler(self)
+            self._sticky_logger = None
 
     def emit(self, record: logging.LogRecord):
         msg = self.format(record)
-        # Strip ANSI escape codes, carriage returns, and whitespace
-        cleaned = msg.replace("\r", "").strip()
-        # Skip lines that are only dots, spaces, or emoji (Thinker animation frames)
-        if not cleaned or not any(c.isalpha() or c.isdigit() for c in cleaned):
+        if _is_animation_frame(msg):
             return
-        # Skip lines that are purely dots with optional prefix (e.g. "ef7a> ...")
-        text_after_prefix = cleaned.split(">", 1)[-1].strip() if ">" in cleaned else cleaned
-        if not text_after_prefix or set(text_after_prefix) <= {".", " "}:
-            return
-        self._send(cleaned, record.levelname)
+        self._send(msg.replace("\r", "").strip(), record.levelname)
 
     def _send(self, message: str, level: str = "INFO"):
+        if not message:
+            return
         try:
             from websocket_manager import run_manager
             asyncio.run_coroutine_threadsafe(
@@ -42,10 +117,9 @@ class WsLogHandler(logging.Handler):
 
 class WsStdoutCapture:
     """
-    Replaces sys.stdout in the nova_act thread so that NovaAct's direct
-    print() output is forwarded over WebSocket instead of (or in addition to)
-    the terminal. Buffers partial writes and only sends complete lines that
-    contain alphanumeric text, preventing duplicate/emoji-only spinner updates.
+    Replaces sys.stdout in the nova_act thread so that any direct print()
+    output is forwarded over WebSocket. Buffers partial writes and only sends
+    complete lines with real alphanumeric content.
     """
 
     def __init__(self, run_id: str, loop: asyncio.AbstractEventLoop, passthrough: bool = False):
@@ -55,16 +129,9 @@ class WsStdoutCapture:
         self._original = sys.stdout
         self._buffer = ""
 
-    def _has_text(self, s: str) -> bool:
-        return any(c.isalpha() or c.isdigit() for c in s)
-
     def _emit_line(self, line: str):
-        stripped = line.strip()
-        if not stripped or not self._has_text(stripped):
-            return
-        # Skip pure dot-animation lines (e.g. "ef7a> ..." or "ef7a> ..")
-        text_after_prefix = stripped.split(">", 1)[-1].strip() if ">" in stripped else stripped
-        if not text_after_prefix or set(text_after_prefix) <= {".", " "}:
+        stripped = line.replace("\r", "").strip()
+        if not stripped or _is_animation_frame(stripped):
             return
         try:
             from websocket_manager import run_manager
@@ -82,8 +149,6 @@ class WsStdoutCapture:
     def write(self, text: str):
         if self.passthrough:
             self._original.write(text)
-        # Carriage returns overwrite the current line in terminals — treat as
-        # line terminators so spinner frames are processed and discarded.
         text = text.replace("\r", "\n")
         self._buffer += text
         while "\n" in self._buffer:

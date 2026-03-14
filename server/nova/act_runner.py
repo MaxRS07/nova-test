@@ -65,7 +65,7 @@ class ActRunner:
             nonlocal error_occurred
 
             if ws_handler:
-                logging.getLogger("nova_act").addHandler(ws_handler)
+                ws_handler.attach("nova_act")
 
             # Ensure this thread has no event loop (safety for Python 3.10+)
             try:
@@ -142,7 +142,7 @@ class ActRunner:
 
                 finally:
                     if ws_handler:
-                        logging.getLogger("nova_act").removeHandler(ws_handler)
+                        ws_handler.detach()
 
                     if self.nova:
                         try:
