@@ -3,80 +3,111 @@
 import Sidebar from '@/components/Sidebar';
 import Topbar from '@/components/Topbar';
 import { useParams, useRouter } from 'next/navigation';
-import { TestRun, TestRunStatus } from '@/types/nova';
+import { TestRun, TestRunEvent, Fault } from '@/types/nova';
 import { useState, useEffect } from 'react';
-import { getTestRunFresh } from '@/lib/supabase';
-import { getSocket } from '@/lib/nova';
+import { getTestRunFresh, getTestRunEvents } from '@/lib/supabase';
+import { supabase } from '@/lib/supabaseClient';
+
+function applyEvents(events: TestRunEvent[]): { logs: string[]; thinking: string[]; faults: Fault[] } {
+    const logs: string[] = [];
+    const thinking: string[] = [];
+    const faults: Fault[] = [];
+
+    for (const event of events) {
+        try {
+            const parsed = JSON.parse(event.data);
+            if (event.type === 'metadata') logs.push('Metadata: ' + JSON.stringify(parsed));
+            else if (event.type === 'thinking') {
+                if (parsed[4] === '>') thinking.push(parsed);
+                else logs.push(parsed);
+            }
+            else if (event.type === 'fault') {
+                if (Array.isArray(parsed)) faults.push(...parsed);
+                else faults.push(parsed);
+            }
+        } catch {
+            if (event.type === 'thinking') logs.push(event.data);
+        }
+    }
+
+    return { logs, thinking, faults };
+}
 
 export default function TestDetailPage() {
     const params = useParams();
     const repositoryId = Number(params.repository_id);
     const testId = params.test_id as string;
     const router = useRouter();
+
     const [outputTab, setOutputTab] = useState<'output' | 'thinking'>('output');
     const [run, setRun] = useState<TestRun | null>(null);
+    const [events, setEvents] = useState<TestRunEvent[]>([]);
     const [loadError, setLoadError] = useState(false);
+
+    const { logs, thinking, faults } = applyEvents(events);
 
     useEffect(() => {
         if (!testId) return;
 
-        // Load initial state from DB
-        getTestRunFresh(testId)
-            .then(r => { setRun(r); setLoadError(false); })
-            .catch(() => setLoadError(true));
+        Promise.all([
+            getTestRunFresh(testId),
+            getTestRunEvents(testId),
+        ]).then(([r, e]) => {
+            setRun(r);
+            setEvents(e);
+            setLoadError(false);
+        }).catch(() => setLoadError(true));
 
-        // If there's a live socket in the store, wire up callbacks
-        const socket = getSocket(testId);
-        if (!socket) return;
-
-        const onMeta = (metadata: any) =>
-            setRun(prev => prev ? { ...prev, logs: [...prev.logs, String(metadata)] } : prev);
-
-        const onFault = (faults: any[]) =>
-            setRun(prev => prev ? { ...prev, faults: [...prev.faults, ...faults] } : prev);
-
-        const onThinking = (message: string) =>
-            setRun(prev => {
-                if (!prev) return prev;
-                const last = prev.thinking[prev.thinking.length - 1];
-                if (last) {
-                    const lw = last.split(' ', 1).pop();
-                    const cw = message.split(' ', 1).pop();
-                    if (cw && lw && cw[0] === lw[0]) return prev;
+        // Watch for status/duration updates on the run row
+        const runChannel = supabase
+            .channel(`test-run-detail-${testId}`)
+            .on(
+                'postgres_changes',
+                { event: 'UPDATE', schema: 'public', table: 'test_runs', filter: `id=eq.${testId}` },
+                ({ new: row }) => {
+                    setRun({
+                        id: row.id,
+                        repo_id: row.repo_id,
+                        url: row.url,
+                        pages: row.pages,
+                        config: row.config,
+                        agents: row.agents,
+                        userAgents: row.user_agents,
+                        status: row.status,
+                        timestamp: row.timestamp ? new Date(row.timestamp).toLocaleString() : '',
+                        duration: row.duration,
+                    });
                 }
-                return { ...prev, thinking: [...prev.thinking, message] };
-            });
+            )
+            .subscribe();
 
-        const onClose = () =>
-            setRun(prev => prev ? { ...prev, status: 'completed' } : prev);
-
-        const onError = () =>
-            setRun(prev => prev ? { ...prev, status: 'failed' } : prev);
-
-        // Attach — save previous callbacks so we don't clobber the list page's handlers
-        const prevMeta = socket.onMetadataUpdate;
-        const prevFault = socket.onFault;
-        const prevThinking = socket.onThinking;
-        const prevClose = socket.onClose;
-        const prevError = socket.onError;
-
-        socket.onMetadataUpdate = (m) => { prevMeta?.(m); onMeta(m); };
-        socket.onFault = (f) => { prevFault?.(f); onFault(f); };
-        socket.onThinking = (t) => { prevThinking?.(t); onThinking(t); };
-        socket.onClose = () => { prevClose?.(); onClose(); };
-        socket.onError = (e) => { prevError?.(e); onError(); };
+        // Watch for new events — filter client-side by run_id since server-side
+        // filter requires RLS to be enabled on the table
+        const eventsChannel = supabase
+            .channel(`test-run-events-${testId}`)
+            .on(
+                'postgres_changes',
+                { event: 'INSERT', schema: 'public', table: 'test_run_events' },
+                ({ new: row }) => {
+                    if (row.run_id !== testId) return;
+                    setEvents(prev => [...prev, {
+                        id: row.id,
+                        run_id: row.run_id,
+                        type: row.type,
+                        data: row.data,
+                        created_at: row.created_at,
+                    }]);
+                }
+            )
+            .subscribe();
 
         return () => {
-            // Restore list page callbacks on unmount
-            socket.onMetadataUpdate = prevMeta;
-            socket.onFault = prevFault;
-            socket.onThinking = prevThinking;
-            socket.onClose = prevClose;
-            socket.onError = prevError;
+            supabase.removeChannel(runChannel);
+            supabase.removeChannel(eventsChannel);
         };
     }, [testId]);
 
-    const statusBadge = (status: TestRunStatus) => {
+    const statusBadge = (status: TestRun['status']) => {
         const styles = {
             running: 'bg-blue-500/15 text-blue-400',
             completed: 'bg-emerald-500/15 text-emerald-400',
@@ -126,8 +157,8 @@ export default function TestDetailPage() {
                                     </div>
                                 </div>
 
-                                { /* Test URL */}
-                                <div className='bg-[var(--surface)] rounded-xl p-4 mb-6' style={{ border: '1px solid var(--border-subtle)' }}>
+                                {/* Test URL */}
+                                <div className="bg-[var(--surface)] rounded-xl p-4 mb-6" style={{ border: '1px solid var(--border-subtle)' }}>
                                     <p className="text-xs text-[var(--muted)] font-mono uppercase tracking-wider mb-1">URL</p>
                                     <a href={run.url} target="_blank" rel="noopener noreferrer" className="text-sm font-mono text-[var(--accent)] hover:underline">
                                         {run.url}
@@ -139,7 +170,7 @@ export default function TestDetailPage() {
                                     {[
                                         { label: 'Status', value: run.status, color: run.status === 'running' ? 'text-blue-400' : run.status === 'completed' ? 'text-emerald-400' : 'text-rose-400' },
                                         { label: 'Agents', value: run.agents, color: 'text-[var(--foreground)]' },
-                                        { label: 'Faults Detected', value: run.faults.length, color: run.faults.length > 0 ? 'text-rose-500' : 'text-emerald-500' },
+                                        { label: 'Faults Detected', value: faults.length, color: faults.length > 0 ? 'text-rose-500' : 'text-emerald-500' },
                                     ].map((card) => (
                                         <div key={card.label} className="bg-[var(--surface)] rounded-xl p-4" style={{ border: '1px solid var(--border-subtle)' }}>
                                             <p className="text-xs text-[var(--muted)] font-mono uppercase tracking-wider mb-1">{card.label}</p>
@@ -209,17 +240,17 @@ export default function TestDetailPage() {
                                     </div>
                                     <div className="p-6 max-h-96 overflow-y-auto">
                                         {outputTab === 'output' ? (
-                                            run.logs.length === 0 ? (
-                                                <p className="text-sm text-(--muted) font-mono">
+                                            logs.length === 0 ? (
+                                                <p className="text-sm text-[var(--muted)] font-mono">
                                                     {run.status === 'running' ? 'Waiting for output...' : 'No output recorded'}
                                                 </p>
                                             ) : (
                                                 <div className="space-y-1">
-                                                    {run.logs.map((log, i) => {
+                                                    {logs.map((log, i) => {
                                                         const color = log.startsWith('Error:') ? 'text-rose-500' : log.startsWith('Metadata:') ? 'text-blue-400' : 'text-[var(--muted)]';
                                                         return (
-                                                            <div key={i} className={`text-xs font-mono ${color} leading-relaxed break-all flex flex-row`} style={{ textAlign: 'right' }}>
-                                                                <span className={"font-mono text-(--foreground-soft) mr-2 select-none"}>
+                                                            <div key={i} className={`text-xs font-mono ${color} leading-relaxed break-all flex flex-row`}>
+                                                                <span className="font-mono text-[var(--foreground-soft)] mr-2 select-none whitespace-nowrap w-3.75 flex-shrink-0 text-right">
                                                                     {String(i + 1)}
                                                                 </span>
                                                                 {log}
@@ -229,11 +260,11 @@ export default function TestDetailPage() {
                                                 </div>
                                             )
                                         ) : (
-                                            (run as any).thinking && (run as any).thinking.length > 0 ? (
+                                            thinking.length > 0 ? (
                                                 <div className="space-y-1">
-                                                    {(run as any).thinking.map((thought: string, i: number) => (
-                                                        <div key={i} className="text-xs font-mono text-(--muted) leading-relaxed break-all flex flex-row">
-                                                            <span className={"font-mono text-(--foreground-soft) mr-2 select-none"} style={{ textAlign: 'right' }}>
+                                                    {thinking.map((thought, i) => (
+                                                        <div key={i} className="text-xs font-mono text-[var(--muted)] leading-relaxed break-all flex flex-row">
+                                                            <span className="font-mono text-[var(--foreground-soft)] mr-2 select-none text-right whitespace-nowrap w-3.75 flex-shrink-0">
                                                                 {String(i + 1)}
                                                             </span>
                                                             {thought}
@@ -241,7 +272,7 @@ export default function TestDetailPage() {
                                                     ))}
                                                 </div>
                                             ) : (
-                                                <p className="text-sm text-(--muted) font-mono">
+                                                <p className="text-sm text-[var(--muted)] font-mono">
                                                     {run.status === 'running' ? 'Waiting for thinking logs...' : 'No thinking logs recorded'}
                                                 </p>
                                             )
@@ -255,9 +286,9 @@ export default function TestDetailPage() {
                                         <p className="text-xs font-mono text-[var(--muted)] uppercase tracking-wider">Faults</p>
                                     </div>
                                     <div className="p-6">
-                                        {run.faults && run.faults.length > 0 ? (
+                                        {faults.length > 0 ? (
                                             <div className="space-y-4">
-                                                {run.faults.map((fault, i) => (
+                                                {faults.map((fault, i) => (
                                                     <div key={i} className="border-l-2 border-rose-500 pl-4">
                                                         <div className="mb-1">
                                                             <span className="text-xs font-mono text-rose-500 uppercase tracking-wider">{fault.type}</span>
@@ -280,7 +311,7 @@ export default function TestDetailPage() {
                                     </div>
                                 </div>
 
-                                { /* Git Revision */}
+                                {/* Git Revision */}
                                 <div className="bg-[var(--surface)] rounded-xl overflow-hidden" style={{ border: '1px solid var(--border-subtle)' }}>
                                     <div className="px-6 py-4 bg-[var(--muted-bg)] flex items-center justify-between" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
                                         <p className="text-xs font-mono text-[var(--muted)] uppercase tracking-wider">git revision</p>

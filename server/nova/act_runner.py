@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import logging
 import os
 import queue
@@ -25,7 +24,7 @@ if not KEY:
 
 
 class ActRunner:
-    """Manages Nova Act agent execution with optional WebSocket integration."""
+    """Manages Nova Act agent execution, streaming events to Supabase."""
 
     def __init__(self, run_id: Optional[str] = None):
         self.run_id = run_id
@@ -37,23 +36,12 @@ class ActRunner:
         pages: list[str],
         agent_config: list[Agent],
     ) -> AsyncGenerator[ActMetadata, None]:
-        """
-        Run Nova Act workflow with optional WebSocket-based approval handling.
+        from db import persist_event
 
-        Yields:
-            ActMetadata for each step executed
-        """
         results_queue: queue.Queue = queue.Queue()
         loop = asyncio.get_running_loop()
 
-        # Human approval callback
-        if self.run_id:
-            from nova.callbacks.stream_callback import StreamInputCallback
-            human_callback = StreamInputCallback(self.run_id, loop)
-        else:
-            human_callback = None
-
-        # --- Thinking log capture ---
+        # Thinking log capture
         thinking_queue: queue.Queue = queue.Queue()
         thinking_handler = ThinkingLogHandler(thinking_queue)
         thinking_streamer: Optional[ThinkingStreamer] = None
@@ -61,32 +49,16 @@ class ActRunner:
         if self.run_id:
             trace_logger = logging.getLogger(ThinkingLogHandler.LOGGER_NAME)
             trace_logger.addHandler(thinking_handler)
-
             thinking_streamer = ThinkingStreamer(self.run_id, thinking_queue, loop)
             thinking_streamer.start()
 
-        error_occurred = False
-
-        def _send(payload: dict):
-            """Fire-and-forget send from sync thread to the async event loop."""
-            from websocket_manager import run_manager
-            asyncio.run_coroutine_threadsafe(run_manager.send(self.run_id, payload), loop)
-
         def run_sync():
-            nonlocal error_occurred
-
-            try:
-                asyncio.set_event_loop(None)
-            except Exception:
-                pass
-
             use_agent = agent_config[0]
             use_agent_config = use_agent.get("config", {})
-
             temp = use_agent_config.get("temperature", 0.7)
             model_top_P = use_agent_config.get("topP", 5)
 
-            agent = create_agent(url, human_callback, use_agent)
+            agent = create_agent(url, None, use_agent)
             self.nova = agent
 
             try:
@@ -105,20 +77,19 @@ class ActRunner:
                             )
                             results_queue.put(res.metadata)
 
-                            if res.matches_schema:
-                                _send({"type": "fault", "fault": res.parsed_response})
+                            if res.matches_schema and self.run_id:
+                                persist_event(self.run_id, "fault", res.parsed_response)
 
                             if not agent.page.url.startswith(url):
                                 agent.go_to_url(url)
                                 if errors := agent.page.page_errors():
-                                    _send({
-                                        "type": "page_error",
-                                        "page": agent.page.url,
-                                        "errors": errors,
-                                    })
+                                    if self.run_id:
+                                        persist_event(self.run_id, "page_error", {
+                                            "page": agent.page.url,
+                                            "errors": errors,
+                                        })
 
                         except Exception as step_error:
-                            error_occurred = True
                             error_msg = f"Error executing step '{step}': {str(step_error)}"
                             logger.error(error_msg)
                             logger.debug(traceback.format_exc())
@@ -129,7 +100,6 @@ class ActRunner:
                             logger.info(f"Step '{step}' completed in {step_end - step_start:.2f} seconds")
 
             except Exception as agent_error:
-                error_occurred = True
                 error_msg = f"Error during agent execution: {str(agent_error)}"
                 logger.error(error_msg)
                 logger.debug(traceback.format_exc())
@@ -142,7 +112,6 @@ class ActRunner:
                             self.nova.close()
                     except Exception as cleanup_error:
                         logger.warning(f"Error closing Nova agent: {str(cleanup_error)}")
-
                 self.nova = None
                 results_queue.put(None)  # sentinel
 
@@ -152,34 +121,18 @@ class ActRunner:
         try:
             while True:
                 item = await loop.run_in_executor(None, results_queue.get)
-
                 if item is None:
                     break
                 if isinstance(item, Exception):
-                    if self.run_id:
-                        try:
-                            from websocket_manager import run_manager
-                            await run_manager.emit(self.run_id, "error", {"error": str(item)})
-                        except Exception as ws_error:
-                            logger.warning(f"Failed to send error to websocket: {str(ws_error)}")
                     raise item
                 yield item
 
         except Exception as exec_error:
-            error_msg = f"Error during act execution: {str(exec_error)}"
-            logger.error(error_msg)
+            logger.error(f"Error during act execution: {str(exec_error)}")
             logger.debug(traceback.format_exc())
-
-            if self.run_id:
-                try:
-                    from websocket_manager import run_manager
-                    await run_manager.emit(self.run_id, "error", {"error": error_msg})
-                except Exception as ws_error:
-                    logger.warning(f"Failed to send error to websocket: {str(ws_error)}")
             raise
 
         finally:
-            # Stop thinking streamer and clean up the log handler
             if thinking_streamer:
                 thinking_streamer.stop()
                 thinking_streamer.join(timeout=5.0)

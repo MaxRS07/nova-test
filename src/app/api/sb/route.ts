@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
 import { verifyJWT } from '@/lib/jwt';
-import type { TestRun, Agent, Project } from '@/types/nova';
+import type { TestRun, TestRunEvent, Agent, Project } from '@/types/nova';
 
 const supabaseUrl = process.env.SUPABASE_URL!;
 const supabaseKey = process.env.SUPABASE_KEY!;
@@ -23,8 +23,8 @@ function getGithubId(request: Request): string | null {
     return String(payload.github_id);
 }
 
-// Map camelCase Agent → snake_case DB row
-// Only include id if it looks like a uuid (i.e. came from the DB), so inserts let the DB generate it
+// ── Row mappers ───────────────────────────────────────────────────────────────
+
 function agentToRow(agent: Agent, userId: string) {
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(agent.id ?? '');
     return {
@@ -40,7 +40,6 @@ function agentToRow(agent: Agent, userId: string) {
     };
 }
 
-// Map snake_case DB row → camelCase Agent
 function rowToAgent(row: Record<string, any>): Agent {
     return {
         id: row.id,
@@ -55,7 +54,6 @@ function rowToAgent(row: Record<string, any>): Agent {
     };
 }
 
-// Map camelCase TestRun → snake_case DB row
 function testRunToRow(run: TestRun, userId: string) {
     return {
         id: run.id,
@@ -68,14 +66,10 @@ function testRunToRow(run: TestRun, userId: string) {
         user_agents: run.userAgents,
         status: run.status,
         timestamp: new Date(run.timestamp).toISOString(),
-        faults: run.faults,
         duration: run.duration ?? null,
-        logs: run.logs,
-        thinking: (run as any).thinking ?? [],
     };
 }
 
-// Map snake_case DB row → camelCase TestRun
 function rowToTestRun(row: Record<string, any>): TestRun {
     return {
         id: row.id,
@@ -87,16 +81,26 @@ function rowToTestRun(row: Record<string, any>): TestRun {
         userAgents: row.user_agents,
         status: row.status,
         timestamp: row.timestamp ? new Date(row.timestamp).toLocaleString() : '',
-        faults: row.faults,
         duration: row.duration,
-        logs: row.logs ?? [],
-        thinking: row.thinking ?? [],
     };
 }
 
+function rowToTestRunEvent(row: Record<string, any>): TestRunEvent {
+    return {
+        id: row.id,
+        run_id: row.run_id,
+        type: row.type,
+        data: row.data,
+        created_at: row.created_at,
+    };
+}
+
+// ── GET ───────────────────────────────────────────────────────────────────────
 /**
  * GET /api/sb?resource=test-runs&repo_id=...
  * GET /api/sb?resource=test-runs&id=...
+ * GET /api/sb?resource=test-run-events&run_id=...
+ * GET /api/sb?resource=fault-counts&repo_id=...   → Record<run_id, number>
  * GET /api/sb?resource=agents&repo_id=...
  * GET /api/sb?resource=agents&id=...
  * GET /api/sb?resource=projects&repo_id=...
@@ -106,6 +110,7 @@ export async function GET(request: Request) {
     const resource = searchParams.get('resource');
     const id = searchParams.get('id');
     const repoId = searchParams.get('repo_id');
+    const runId = searchParams.get('run_id');
 
     if (!resource) {
         return NextResponse.json({ error: 'Missing resource parameter' }, { status: 400 });
@@ -129,6 +134,44 @@ export async function GET(request: Request) {
             .order('timestamp', { ascending: false });
         if (error) return NextResponse.json({ error: error.message }, { status: 500 });
         return NextResponse.json(data.map(rowToTestRun));
+    }
+
+    if (resource === 'test-run-events') {
+        if (!runId) {
+            return NextResponse.json({ error: 'Missing run_id' }, { status: 400 });
+        }
+        const { data, error } = await supabase
+            .from('test_run_events').select('*')
+            .eq('run_id', runId)
+            .order('created_at', { ascending: true });
+        if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+        return NextResponse.json(data.map(rowToTestRunEvent));
+    }
+
+    if (resource === 'fault-counts') {
+        if (!repoId) {
+            return NextResponse.json({ error: 'Missing repo_id' }, { status: 400 });
+        }
+        // Fetch all run IDs for this repo, then count fault events per run in one query
+        const { data: runs, error: runsError } = await supabase
+            .from('test_runs').select('id').eq('repo_id', repoId);
+        if (runsError) return NextResponse.json({ error: runsError.message }, { status: 500 });
+
+        const runIds = runs.map((r: any) => r.id);
+        if (runIds.length === 0) return NextResponse.json({});
+
+        const { data: events, error: eventsError } = await supabase
+            .from('test_run_events').select('run_id')
+            .in('run_id', runIds)
+            .eq('type', 'fault');
+        if (eventsError) return NextResponse.json({ error: eventsError.message }, { status: 500 });
+
+        // Tally counts
+        const counts: Record<string, number> = {};
+        for (const row of events) {
+            counts[row.run_id] = (counts[row.run_id] ?? 0) + 1;
+        }
+        return NextResponse.json(counts);
     }
 
     if (resource === 'agents') {
@@ -162,6 +205,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: `Unknown resource: ${resource}` }, { status: 400 });
 }
 
+// ── POST ──────────────────────────────────────────────────────────────────────
 /**
  * POST /api/sb
  *   { action: 'save-test-run', testRun }
@@ -223,7 +267,6 @@ export async function POST(request: Request) {
         if (!project) return NextResponse.json({ error: 'Missing project' }, { status: 400 });
         if (!project.repo_id) return NextResponse.json({ error: 'Missing project.repo_id' }, { status: 400 });
 
-        // Only write columns that exist in the schema
         const row = {
             repo_id: project.repo_id,
             url: project.url ?? null,
@@ -241,6 +284,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });
 }
 
+// ── DELETE ────────────────────────────────────────────────────────────────────
 /**
  * DELETE /api/sb
  *   { action: 'delete-test-run', id }

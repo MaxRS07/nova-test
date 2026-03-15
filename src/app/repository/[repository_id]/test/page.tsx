@@ -3,21 +3,13 @@
 import Sidebar from '@/components/Sidebar';
 import Topbar from '@/components/Topbar';
 import { useParams } from 'next/navigation';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { startNovaActJob } from '@/lib/nova';
+import { supabase } from '@/lib/supabaseClient';
 import { ActRequestBody, defaultUiAgent, TestRun } from '@/types/nova';
-import { getTestRuns, saveTestRun, deleteTestRun } from '@/lib/supabase';
+import { getTestRuns, saveTestRun, deleteTestRun, getFaultCounts } from '@/lib/supabase';
 import TestRunsTable from '../../../../components/TestRunsTable';
 import NewTestForm from '../../../../components/NewTestForm';
-
-function formatDuration(seconds: number) {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = seconds % 60;
-    if (h > 0) return `${h}h ${m}m ${s}s`;
-    if (m > 0) return `${m}m ${s}s`;
-    return `${s}s`;
-}
 
 function isValidUrl(url: string) {
     try { new URL(url); return true; } catch { return false; }
@@ -29,7 +21,7 @@ export default function TestPage() {
 
     const [view, setView] = useState<'list' | 'new'>('list');
     const [testRuns, setTestRuns] = useState<TestRun[]>([]);
-    const [activeSockets, setActiveSockets] = useState<Record<string, any>>({});
+    const [faultCounts, setFaultCounts] = useState<Record<string, number>>({});
     const [isLoadingTests, setIsLoadingTests] = useState(true);
     const [launchError, setLaunchError] = useState<string | null>(null);
 
@@ -41,20 +33,26 @@ export default function TestPage() {
     const [userAgents, setUserAgents] = useState<string[]>(['default-ui-agent']);
     const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
-    // Load runs from DB; sanitise any 'running' runs that have no active socket
+    const channelsRef = useRef<Record<string, ReturnType<typeof supabase.channel>>>({});
+
     useEffect(() => {
         if (!repositoryId) return;
         (async () => {
             try {
                 setIsLoadingTests(true);
-                const runs = await getTestRuns(repositoryId);
+                const [runs, counts] = await Promise.all([
+                    getTestRuns(repositoryId),
+                    getFaultCounts(repositoryId),
+                ]);
                 const sanitised = runs.map(r =>
-                    r.status === 'running' ? { ...r, status: 'failed' as const } : r
+                    r.status === 'running' && !channelsRef.current[r.id]
+                        ? { ...r, status: 'failed' as const }
+                        : r
                 );
                 setTestRuns(sanitised);
-                // Persist corrected status back to DB
+                setFaultCounts(counts);
                 for (const orig of runs) {
-                    if (orig.status === 'running') {
+                    if (orig.status === 'running' && !channelsRef.current[orig.id]) {
                         const fixed = sanitised.find(r => r.id === orig.id)!;
                         saveTestRun(fixed).catch(console.error);
                     }
@@ -65,6 +63,11 @@ export default function TestPage() {
                 setIsLoadingTests(false);
             }
         })();
+
+        return () => {
+            Object.values(channelsRef.current).forEach(ch => supabase.removeChannel(ch));
+            channelsRef.current = {};
+        };
     }, [repositoryId]);
 
     const resetForm = () => {
@@ -87,6 +90,54 @@ export default function TestPage() {
         });
     };
 
+    const subscribeToRun = (runId: string) => {
+        // Watch for run status/duration updates
+        const runChannel = supabase
+            .channel(`test-run-list-${runId}`)
+            .on(
+                'postgres_changes',
+                { event: 'UPDATE', schema: 'public', table: 'test_runs', filter: `id=eq.${runId}` },
+                ({ new: row }) => {
+                    const updated: TestRun = {
+                        id: row.id,
+                        repo_id: row.repo_id,
+                        url: row.url,
+                        pages: row.pages,
+                        config: row.config,
+                        agents: row.agents,
+                        userAgents: row.user_agents,
+                        status: row.status,
+                        timestamp: row.timestamp ? new Date(row.timestamp).toLocaleString() : '',
+                        duration: row.duration,
+                    };
+                    setTestRuns(prev => prev.map(r => r.id === runId ? updated : r));
+                    if (updated.status !== 'running') {
+                        supabase.removeChannel(runChannel);
+                        supabase.removeChannel(faultChannel);
+                        delete channelsRef.current[runId];
+                        setIsLaunching(false);
+                    }
+                }
+            )
+            .subscribe();
+
+        // Watch for incoming fault events to keep the count live
+        const faultChannel = supabase
+            .channel(`test-run-faults-${runId}`)
+            .on(
+                'postgres_changes',
+                { event: 'INSERT', schema: 'public', table: 'test_run_events', filter: `run_id=eq.${runId}` },
+                ({ new: row }) => {
+                    if (row.type === 'fault') {
+                        setFaultCounts(prev => ({ ...prev, [runId]: (prev[runId] ?? 0) + 1 }));
+                    }
+                }
+            )
+            .subscribe();
+
+        channelsRef.current[runId] = runChannel;
+    };
+
     const handleLaunchTests = async () => {
         setIsLaunching(true);
         setLaunchError(null);
@@ -99,8 +150,7 @@ export default function TestPage() {
         };
 
         try {
-            const actSocket = await startNovaActJob(actRequest);
-            const runId = actSocket.getRunId();
+            const runId = await startNovaActJob(actRequest);
 
             const newRun: TestRun = {
                 id: runId,
@@ -112,90 +162,13 @@ export default function TestPage() {
                 userAgents: [...userAgents],
                 status: 'running',
                 timestamp: new Date().toISOString(),
-                faults: [],
                 duration: '—',
-                logs: [],
-                thinking: [],
             };
 
             setTestRuns(prev => [newRun, ...prev]);
-            setActiveSockets(prev => ({ ...prev, [runId]: actSocket }));
-            saveTestRun(newRun).catch(console.error);
-
-            const startTime = Date.now();
-
-            actSocket.onApprovalRequest = async () => true;
-
-            actSocket.onMetadataUpdate = (metadata) => {
-                setTestRuns(prev => {
-                    const next = prev.map(r =>
-                        r.id === runId ? { ...r, logs: [...r.logs, "Metadata: " + JSON.stringify(metadata)] } : r
-                    );
-                    const updated = next.find(r => r.id === runId);
-                    if (updated) saveTestRun(updated).catch(console.error);
-                    return next;
-                });
-            };
-
-            actSocket.onFault = (faults) => {
-                if (Array.isArray(faults)) {
-                    setTestRuns(prev => {
-                        const next = prev.map(r =>
-                            r.id === runId ? { ...r, faults: [...r.faults, ...faults] } : r
-                        );
-                        const updated = next.find(r => r.id === runId);
-                        if (updated) saveTestRun(updated).catch(console.error);
-                        return next;
-                    });
-                }
-            };
-
-            actSocket.onThinking = (message: string) => {
-                setTestRuns(prev => {
-                    const next = prev.map(r => {
-                        if (r.id === runId) {
-                            if (message[4] === '>') {
-                                return { ...r, thinking: [...r.thinking, message] };
-                            } else {
-                                return { ...r, logs: [...r.logs, message] };
-                            }
-                        }
-                        return r;
-                    });
-                    const updated = next.find(r => r.id === runId);
-                    if (updated) saveTestRun(updated).catch(console.error);
-                    return next;
-                });
-            };
-
-            const finishRun = (finalStatus: 'completed' | 'failed') => {
-                const elapsed = Math.round((Date.now() - startTime) / 1000);
-                setTestRuns(prev => {
-                    const next = prev.map(r => {
-                        if (r.id !== runId) return r;
-                        const updated = {
-                            ...r,
-                            status: finalStatus,
-                            duration: formatDuration(elapsed),
-                        };
-                        saveTestRun(updated).catch(console.error);
-                        return updated;
-                    });
-                    return next;
-                });
-                setActiveSockets(prev => { const u = { ...prev }; delete u[runId]; return u; });
-                setIsLaunching(false);
-            };
-
-            actSocket.onClose = () => finishRun('completed');
-
-            actSocket.onError = (error: any) => {
-                const msg = error instanceof Error ? error.message : String(error);
-                setTestRuns(prev => prev.map(r =>
-                    r.id === runId ? { ...r, logs: [...r.logs, `Error: ${msg}`] } : r
-                ));
-                finishRun('failed');
-            };
+            setFaultCounts(prev => ({ ...prev, [runId]: 0 }));
+            await saveTestRun(newRun);
+            subscribeToRun(runId);
         } catch (error) {
             setLaunchError(error instanceof Error ? error.message : 'Failed to launch test fleet');
             setIsLaunching(false);
@@ -205,30 +178,22 @@ export default function TestPage() {
     };
 
     const handleDeleteTestRun = async (runId: string) => {
-        const socket = activeSockets[runId];
+        const channel = channelsRef.current[runId];
 
-        if (socket) {
-            // Running — cancel and mark cancelled
-            try {
-                socket.cancel?.();
-                socket.close?.();
-            } catch (err) {
-                console.error('Failed to close socket:', err);
+        if (channel) {
+            supabase.removeChannel(channel);
+            delete channelsRef.current[runId];
+            const cancelled = testRuns.find(r => r.id === runId);
+            if (cancelled) {
+                const updated = { ...cancelled, status: 'cancelled' as const };
+                setTestRuns(prev => prev.map(r => r.id === runId ? updated : r));
+                saveTestRun(updated).catch(console.error);
             }
-            setTestRuns(prev => {
-                const next = prev.map(r =>
-                    r.id === runId ? { ...r, status: 'cancelled' as const } : r
-                );
-                const run = next.find(r => r.id === runId);
-                if (run) saveTestRun(run).catch(console.error);
-                return next;
-            });
-            setActiveSockets(prev => { const u = { ...prev }; delete u[runId]; return u; });
         } else {
-            // Not running — delete from DB
             try {
                 await deleteTestRun(runId);
                 setTestRuns(prev => prev.filter(r => r.id !== runId));
+                setFaultCounts(prev => { const u = { ...prev }; delete u[runId]; return u; });
             } catch (err) {
                 setLaunchError(`Failed to delete: ${err instanceof Error ? err.message : 'Unknown error'}`);
             }
@@ -259,6 +224,7 @@ export default function TestPage() {
                             <TestRunsTable
                                 repositoryId={repositoryId}
                                 testRuns={testRuns}
+                                faultCounts={faultCounts}
                                 isLoading={isLoadingTests}
                                 onDelete={handleDeleteTestRun}
                                 onNew={() => { resetForm(); setView('new'); }}

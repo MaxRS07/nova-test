@@ -25,7 +25,7 @@ export default function Topbar() {
         <header className="h-14 flex items-center justify-between px-6 bg-[var(--surface)] shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
             <div className='flex flex-row'>
                 <Link href="/" className="font-mono text-sm font-semibold text-[var(--foreground)] hover:text-[var(--accent)] transition-colors tracking-tight">
-                    qa-platform
+                    nova-test
                 </Link>
                 {params.repository_id && (
                     <>

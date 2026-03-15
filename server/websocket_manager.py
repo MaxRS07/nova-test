@@ -5,6 +5,7 @@ import asyncio
 import uuid
 from typing import Dict, Any
 from nova.types import Agent
+import logging
 
 router = APIRouter()
 
@@ -94,6 +95,11 @@ class RunManager:
 
     async def emit(self, run_id: str, event: str, data: Any = None):
         """Send a typed event to the client."""
+        from db import persist_event
+        try:
+            persist_event(run_id, event, data)  # Log the event to the database, but don't fail if this doesn't work
+        except Exception:
+            logging.error(f"Failed to persist event {event} for run {run_id}")
         await self.send(run_id, {"type": event, "data": data})
 
     # -----------------------------

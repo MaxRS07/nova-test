@@ -27,7 +27,7 @@ export default function AuthPage() {
 
                 {/* Wordmark */}
                 <div className="mb-16">
-                    <p className="font-mono text-sm font-semibold text-[var(--foreground)] tracking-tight">qa-platform</p>
+                    <p className="font-mono text-sm font-semibold text-[var(--foreground)] tracking-tight">nova-test</p>
                 </div>
 
                 {/* Header */}

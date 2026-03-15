@@ -1,4 +1,4 @@
-import type { TestRun, Agent, Project } from '@/types/nova';
+import type { TestRun, TestRunEvent, Agent, Project } from '@/types/nova';
 
 const BASE = '/api/sb';
 
@@ -26,7 +26,6 @@ function cacheInvalidate(prefix: string) {
 
 async function fetchCached<T>(url: string): Promise<T> {
     const cached = cacheGet<T>(url);
-    // Return cache immediately; refresh in background
     if (cached !== null) {
         fetch(url).then(r => r.ok && r.json().then(d => cacheSet(url, d)) || null).catch(() => { });
         return cached;
@@ -53,13 +52,12 @@ export async function getTestRun(id: string): Promise<TestRun> {
     return fetchCached(`${BASE}?resource=test-runs&id=${encodeURIComponent(id)}`);
 }
 
-/** Bypasses the 30s cache — use for polling a live run. */
 export async function getTestRunFresh(id: string): Promise<TestRun> {
     const url = `${BASE}?resource=test-runs&id=${encodeURIComponent(id)}`;
     const res = await fetch(url, { cache: 'no-store' });
     if (!res.ok) return parseError(res, 'Failed to fetch test run');
     const data: TestRun = await res.json();
-    cacheSet(url, data); // keep cache warm for other callers
+    cacheSet(url, data);
     return data;
 }
 
@@ -82,6 +80,24 @@ export async function deleteTestRun(id: string): Promise<void> {
     });
     cacheInvalidate('test-runs');
     if (!res.ok) return parseError(res, 'Failed to delete test run');
+}
+
+// ── Test Run Events ───────────────────────────────────────────────────────────
+
+/** Fetch all past events for a run ordered by creation time. Use for replay on page load. */
+export async function getTestRunEvents(runId: string): Promise<TestRunEvent[]> {
+    const url = `${BASE}?resource=test-run-events&run_id=${encodeURIComponent(runId)}`;
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) return parseError(res, 'Failed to fetch test run events');
+    return res.json();
+}
+
+/** Fetch fault counts for all runs in a repo. Returns { [run_id]: count }. */
+export async function getFaultCounts(repoId: number): Promise<Record<string, number>> {
+    const url = `${BASE}?resource=fault-counts&repo_id=${repoId}`;
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) return parseError(res, 'Failed to fetch fault counts');
+    return res.json();
 }
 
 // ── Agents ───────────────────────────────────────────────────────────────────

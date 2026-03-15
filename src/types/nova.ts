@@ -3,10 +3,6 @@
  * Types for browser automation, interactions, and file operations
  */
 
-/**
- * Common request/response types
- */
-
 export type ActMetadata = {
     session_id: string;
     act_id: string;
@@ -39,10 +35,23 @@ export type TestRun = {
     userAgents: string[];
     status: TestRunStatus;
     timestamp: string;
-    faults: Fault[];
     duration: string;
-    logs: string[];
-    thinking: string[];
+}
+
+export type TestRunEventType = 'metadata' | 'fault' | 'thinking';
+
+export type TestRunEvent = {
+    id: string;
+    run_id: string;
+    type: TestRunEventType;
+    data: string;       // text column — JSON-encoded string from the server
+    created_at: string;
+}
+
+export type Fault = {
+    message: string;
+    type: string;
+    traceback: string;
 }
 
 export interface Agent {
@@ -83,9 +92,3 @@ export const defaultUiAgent: Agent = {
     },
     selectedTools: [],
 };
-
-export type Fault = {
-    message: string;
-    type: string;
-    traceback: string;
-}
