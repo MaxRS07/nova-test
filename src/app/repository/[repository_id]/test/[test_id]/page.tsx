@@ -22,13 +22,16 @@ function applyEvents(events: TestRunEvent[]): { logs: string[]; thinking: string
                 else logs.push(parsed);
             }
             else if (event.type === 'fault') {
-                if (Array.isArray(parsed)) faults.push(...parsed);
-                else faults.push(parsed);
+                const p = parsed.faults
+                if (Array.isArray(p)) faults.push(...p);
+                else faults.push(p);
             }
         } catch {
             if (event.type === 'thinking') logs.push(event.data);
         }
     }
+
+    console.log({ logs, thinking, faults });
 
     return { logs, thinking, faults };
 }
