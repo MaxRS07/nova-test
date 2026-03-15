@@ -4,16 +4,53 @@ import Topbar from '@/components/Topbar';
 import RepositoryConnectCard from '@/components/RepositoryConnectCard';
 import { useProjects } from '@/contexts/ProjectsContext';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
-import { saveProject, deleteProject } from '@/lib/supabase';
+import { useState, useEffect } from 'react';
+import { saveProject, deleteProject, getTestRuns } from '@/lib/supabase';
 
 export default function Home() {
   const { projects, addProject, removeProject } = useProjects();
   const [connectPageOpen, setConnectPageOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [testCounts, setTestCounts] = useState<Record<number, number>>({});
+  const [lastUpdated, setLastUpdated] = useState<Record<number, string>>({});
 
   const router = useRouter();
+
+  useEffect(() => {
+    const loadTestData = async () => {
+      const counts: Record<number, number> = {};
+      const updated: Record<number, string> = {};
+
+      for (const proj of Object.values(projects)) {
+        try {
+          const runs = await getTestRuns(proj.id);
+          counts[proj.id] = runs.length;
+          if (runs.length > 0) {
+            const sortedRuns = runs.sort((a, b) =>
+              new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+            );
+            const latestRun = sortedRuns[0];
+            const date = new Date(latestRun.timestamp);
+            updated[proj.id] = date.toLocaleDateString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              year: '2-digit'
+            });
+          }
+        } catch (err) {
+          console.error(`Failed to load tests for project ${proj.id}:`, err);
+        }
+      }
+
+      setTestCounts(counts);
+      setLastUpdated(updated);
+    };
+
+    if (Object.keys(projects).length > 0) {
+      loadTestData();
+    }
+  }, [projects]);
 
   const handleDeleteRepository = async (repoId: number) => {
     setLoading(true);
@@ -83,8 +120,8 @@ export default function Home() {
           {/* Repository Table */}
           <div className="bg-[var(--surface)] rounded-xl overflow-hidden" style={{ border: '1px solid var(--border-subtle)' }}>
             {/* Table header */}
-            <div className="grid grid-cols-[2fr_3fr_1fr_1fr_1fr] px-6 py-3.5 bg-[var(--muted-bg)]" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-              {['name', 'url', 'tests', 'status', ''].map((col) => (
+            <div className="grid grid-cols-[1.5fr_3fr_1fr_1fr_1fr] px-6 py-3.5 bg-[var(--muted-bg)]" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+              {['name', 'url', 'tests', 'updated', ''].map((col) => (
                 <span key={col} className="text-xs font-mono font-medium text-[var(--muted)] uppercase tracking-wider">{col}</span>
               ))}
             </div>
@@ -105,7 +142,7 @@ export default function Home() {
               Object.values(projects).map((proj, i) => (
                 <div
                   key={proj.id}
-                  className="grid grid-cols-[2fr_3fr_1fr_1fr_1fr] px-6 py-5 group hover:bg-[var(--muted-bg)] transition-colors cursor-pointer"
+                  className="grid grid-cols-[1.5fr_3fr_1fr_1fr_1fr] px-6 py-5 group hover:bg-[var(--muted-bg)] transition-colors cursor-pointer"
                   style={i < Object.keys(projects).length - 1 ? { borderBottom: '1px solid var(--border-subtle)' } : {}}
                   onClick={() => !loading && router.push(`/repository/${proj.id}/dashboard`)}
                 >
@@ -113,21 +150,23 @@ export default function Home() {
                     {proj.name}
                   </span>
                   <span className="font-mono text-sm text-[var(--muted)] truncate pr-4">{proj.url}</span>
+                  <span className="font-mono text-sm text-[var(--muted)]">{testCounts[proj.id] ?? 0}</span>
+                  <span className="font-mono text-sm text-[var(--muted)]">{lastUpdated[proj.id] ?? '—'}</span>
                   <div
-                    className="flex items-center justify-end gap-3 opacity-0 group-hover:opacity-100 transition-opacity"
+                    className="flex items-center justify-end gap-8"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <button
                       onClick={() => router.push(`/repository/${proj.id}/dashboard`)}
                       disabled={loading}
-                      className="text-xs font-mono text-[var(--muted)] hover:text-[var(--accent)] transition-colors disabled:opacity-50"
+                      className="text-xs font-mono text-[var(--muted)] hover:text-[var(--accent)] transition-colors"
                     >
                       view
                     </button>
                     <button
                       onClick={() => handleDeleteRepository(proj.id)}
                       disabled={loading}
-                      className="text-xs font-mono text-[var(--muted)] hover:text-rose-500 transition-colors disabled:opacity-50"
+                      className="text-xs font-mono text-[var(--muted)] hover:text-rose-500 transition-colors"
                     >
                       remove
                     </button>

@@ -22,7 +22,7 @@ function applyEvents(events: TestRunEvent[]): { logs: string[]; thinking: string
                 else logs.push(parsed);
             }
             else if (event.type === 'fault') {
-                const p = parsed.faults
+                const p = parsed.faults;
                 if (Array.isArray(p)) faults.push(...p);
                 else faults.push(p);
             }
@@ -30,8 +30,6 @@ function applyEvents(events: TestRunEvent[]): { logs: string[]; thinking: string
             if (event.type === 'thinking') logs.push(event.data);
         }
     }
-
-    console.log({ logs, thinking, faults });
 
     return { logs, thinking, faults };
 }
@@ -61,13 +59,15 @@ export default function TestDetailPage() {
             setLoadError(false);
         }).catch(() => setLoadError(true));
 
-        // Watch for status/duration updates on the run row
+        // Watch for status/duration updates — no filter, guard client-side
+        // (server-side filter requires RLS to be enabled on the table)
         const runChannel = supabase
             .channel(`test-run-detail-${testId}`)
             .on(
                 'postgres_changes',
-                { event: 'UPDATE', schema: 'public', table: 'test_runs', filter: `id=eq.${testId}` },
+                { event: 'UPDATE', schema: 'public', table: 'test_runs' },
                 ({ new: row }) => {
+                    if (row.id !== testId) return;
                     setRun({
                         id: row.id,
                         repo_id: row.repo_id,
@@ -84,8 +84,7 @@ export default function TestDetailPage() {
             )
             .subscribe();
 
-        // Watch for new events — filter client-side by run_id since server-side
-        // filter requires RLS to be enabled on the table
+        // Watch for new events — filter client-side by run_id
         const eventsChannel = supabase
             .channel(`test-run-events-${testId}`)
             .on(
@@ -253,7 +252,7 @@ export default function TestDetailPage() {
                                                         const color = log.startsWith('Error:') ? 'text-rose-500' : log.startsWith('Metadata:') ? 'text-blue-400' : 'text-[var(--muted)]';
                                                         return (
                                                             <div key={i} className={`text-xs font-mono ${color} leading-relaxed break-all flex flex-row`}>
-                                                                <span className="font-mono text-[var(--foreground-soft)] mr-2 select-none whitespace-nowrap w-3.75 flex-shrink-0 text-right">
+                                                                <span className="font-mono text-[var(--foreground-soft)] mr-2 select-none">
                                                                     {String(i + 1)}
                                                                 </span>
                                                                 {log}
@@ -267,7 +266,7 @@ export default function TestDetailPage() {
                                                 <div className="space-y-1">
                                                     {thinking.map((thought, i) => (
                                                         <div key={i} className="text-xs font-mono text-[var(--muted)] leading-relaxed break-all flex flex-row">
-                                                            <span className="font-mono text-[var(--foreground-soft)] mr-2 select-none text-right whitespace-nowrap w-3.75 flex-shrink-0">
+                                                            <span className="font-mono text-[var(--foreground-soft)] mr-2 select-none">
                                                                 {String(i + 1)}
                                                             </span>
                                                             {thought}

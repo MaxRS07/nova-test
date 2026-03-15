@@ -1,19 +1,22 @@
 import { useRouter } from 'next/navigation';
 import Dropdown from '@/components/Dropdown';
 import InfoIcon from '@/components/InfoIcon';
+import { Agent, defaultUiAgent } from '@/types/nova';
 
 interface NewTestFormProps {
     repositoryId: number;
     testUrl: string;
     subpages: string[];
     agentCount: number;
-    userAgents: string[];
+    userAgents: Agent[];
+    lastUsedAgentId?: string;
+    availableAgents: Agent[];
     isLaunching: boolean;
     formErrors: Record<string, string>;
     onUrlChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
     onSubpagesChange: (subpages: string[]) => void;
     onAgentCountChange: (count: number) => void;
-    onUserAgentsChange: (agents: string[]) => void;
+    onUserAgentsChange: (agents: Agent[]) => void;
     onLaunch: () => void;
     onBack: () => void;
 }
@@ -28,6 +31,8 @@ export default function NewTestForm({
     subpages,
     agentCount,
     userAgents,
+    lastUsedAgentId,
+    availableAgents,
     isLaunching,
     formErrors,
     onUrlChange,
@@ -67,15 +72,18 @@ export default function NewTestForm({
                             <div key={i} className="flex gap-3 items-center">
                                 <div className="flex-1">
                                     <Dropdown
-                                        options={[{ value: 'default-ui-agent', label: 'Default UI Testing Agent' }]}
-                                        value={agent}
+                                        options={availableAgents.map(a => ({ value: a.id, label: a.name }))}
+                                        value={agent.id}
                                         onChange={(value) => {
                                             const updated = [...userAgents];
-                                            updated[i] = value;
-                                            onUserAgentsChange(updated);
+                                            const selectedAgent = availableAgents.find(a => a.id === value);
+                                            if (selectedAgent) {
+                                                updated[i] = { ...selectedAgent };
+                                                onUserAgentsChange(updated);
+                                            }
                                         }}
                                         onCreate={() => router.push(`/repository/${repositoryId}/agents/new`)}
-                                        lastUsedValue=""
+                                        lastUsedValue={lastUsedAgentId}
                                     />
                                 </div>
                                 {userAgents.length > 1 && (
@@ -92,8 +100,8 @@ export default function NewTestForm({
                     <div className="flex items-center gap-3 mt-3">
                         <button
                             type="button"
-                            onClick={() => userAgents.length < 5 && onUserAgentsChange([...userAgents, 'default-ui-agent'])}
-                            disabled={userAgents.length >= 5}
+                            onClick={() => userAgents.length < 5 && availableAgents.length > 0 && onUserAgentsChange([...userAgents, availableAgents[0]])}
+                            disabled={userAgents.length >= 5 || availableAgents.length === 0}
                             className="px-3 py-2 text-xs font-mono text-[var(--accent)] hover:bg-[var(--muted-bg)] rounded-lg transition-colors border border-[var(--border-subtle)] disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             + Add Agent
@@ -132,9 +140,8 @@ export default function NewTestForm({
                         value={testUrl}
                         onChange={onUrlChange}
                         placeholder="https://myapp.com"
-                        className={`w-full p-3 rounded-lg border transition-all font-mono text-sm bg-[var(--background)] ${
-                            formErrors['testUrl'] ? 'border-rose-500 focus:outline-none' : 'border-[var(--border-subtle)]'
-                        }`}
+                        className={`w-full p-3 rounded-lg border transition-all font-mono text-sm bg-[var(--background)] ${formErrors['testUrl'] ? 'border-rose-500 focus:outline-none' : 'border-[var(--border-subtle)]'
+                            }`}
                     />
                     {formErrors['testUrl'] && (
                         <p className="text-xs text-rose-500 font-mono mt-2">{formErrors['testUrl']}</p>
@@ -182,11 +189,10 @@ export default function NewTestForm({
             <button
                 onClick={onLaunch}
                 disabled={!canLaunch}
-                className={`w-full py-3 rounded-lg font-semibold transition-all border flex items-center justify-center gap-2 ${
-                    canLaunch
-                        ? 'text-white border-[var(--muted)] hover:shadow-lg cursor-pointer'
-                        : 'text-[var(--muted)] cursor-not-allowed border-[var(--border)]'
-                }`}
+                className={`w-full py-3 rounded-lg font-semibold transition-all border flex items-center justify-center gap-2 ${canLaunch
+                    ? 'text-white border-[var(--muted)] hover:shadow-lg cursor-pointer'
+                    : 'text-[var(--muted)] cursor-not-allowed border-[var(--border)]'
+                    }`}
             >
                 {isLaunching && (
                     <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />

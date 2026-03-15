@@ -59,7 +59,7 @@ export default function RepositorySettings() {
                                             className="sr-only"
                                         />
                                         <div
-                                            className={`block w-full h-full rounded-full transition-colors cursor-pointer ${autoApproveActions ? 'bg-[--accent]' : 'bg-[--muted-bg]'}`}
+                                            className={`block w-full h-full rounded-full transition-colors cursor-pointer ${autoApproveActions ? 'bg-[var(--accent)]' : 'bg-[var(--muted-bg)]'}`}
                                         />
                                         <div
                                             className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${autoApproveActions ? 'translate-x-6' : 'translate-x-0'

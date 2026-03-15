@@ -55,7 +55,7 @@ export type Fault = {
 }
 
 export interface Agent {
-    id?: string;
+    id: string;
     repo_id?: number;
     name: string;
     actions: string[];

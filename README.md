@@ -1,12 +1,53 @@
-# NovaFlow
+# NovaTest
 
-NovaFlow is a web-based hub for creating, managing, and reusing Nova Act workflows. It lets developers compose modular agent pipelines, parameterize them, and run or modify existing workflows without starting from scratch. 
+AI-powered browser testing platform built on [Amazon Nova Act](https://nova.amazon.com/act).
 
-Built with Next.js + typescript, Supabase, nova-act Python SDK, and AWS agents.
+## What it does
 
-## Why NovaFlow?
+NovaTest runs autonomous browser agents against your web app to detect UI faults, visual errors, and broken flows — without writing test scripts.
 
-NovaFlow is built specifically with users in mind, no technical experience required. Users can go straight from idea to execution using the in app multi-agent workflow.
+## Stack
 
+- **Frontend** — Next.js, Supabase Realtime
+- **Backend** — FastAPI (Python)
+- **Agent** — Amazon Nova Act
+- **Database** — Supabase (Postgres)
 
-_Built for the Nova AI Hackathon_
+## Getting started
+
+**Frontend**
+```bash
+cd nova-flow
+npm install
+npm run dev
+```
+
+**Backend**
+```bash
+cd server
+pip install -r requirements.txt
+python main.py
+```
+
+**Environment variables**
+
+```env
+# Frontend (.env.local)
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_URL=
+SUPABASE_KEY=
+NOVA_ACT_API_URL=http://localhost:8000
+
+# Backend (.env)
+SUPABASE_URL=
+SUPABASE_KEY=
+NOVA_ACT_API_KEY=
+```
+
+## How it works
+
+1. Point NovaTest at a URL and configure your agents
+2. The backend spins up Nova Act browser agents and streams events to Supabase
+3. The frontend subscribes via Supabase Realtime — live logs, thinking traces, and faults appear as they happen
+4. Results persist across reloads and are accessible from any device

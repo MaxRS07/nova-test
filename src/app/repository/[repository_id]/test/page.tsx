@@ -6,8 +6,8 @@ import { useParams } from 'next/navigation';
 import { useState, useEffect, useRef } from 'react';
 import { startNovaActJob } from '@/lib/nova';
 import { supabase } from '@/lib/supabaseClient';
-import { ActRequestBody, defaultUiAgent, TestRun } from '@/types/nova';
-import { getTestRuns, saveTestRun, deleteTestRun, getFaultCounts } from '@/lib/supabase';
+import { ActRequestBody, Agent, defaultUiAgent, TestRun } from '@/types/nova';
+import { getTestRuns, saveTestRun, deleteTestRun, getFaultCounts, getAgents } from '@/lib/supabase';
 import TestRunsTable from '../../../../components/TestRunsTable';
 import NewTestForm from '../../../../components/NewTestForm';
 
@@ -30,7 +30,9 @@ export default function TestPage() {
     const [subpages, setSubpages] = useState<string[]>([]);
     const [agentCount, setAgentCount] = useState(4);
     const [isLaunching, setIsLaunching] = useState(false);
-    const [userAgents, setUserAgents] = useState<string[]>(['default-ui-agent']);
+    const [userAgents, setUserAgents] = useState<Agent[]>([defaultUiAgent]);
+    const [lastUsedAgentId, setLastUsedAgentId] = useState<string | undefined>(undefined);
+    const [availableAgents, setAvailableAgents] = useState<Agent[]>([defaultUiAgent]);
     const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
     const channelsRef = useRef<Record<string, ReturnType<typeof supabase.channel>>>({});
@@ -49,6 +51,10 @@ export default function TestPage() {
                         ? { ...r, status: 'failed' as const }
                         : r
                 );
+
+                const last = sanitised[sanitised.length - 1]
+                last && last.userAgents[0] && setLastUsedAgentId(last.userAgents[0]);
+
                 setTestRuns(sanitised);
                 setFaultCounts(counts);
                 for (const orig of runs) {
@@ -57,6 +63,11 @@ export default function TestPage() {
                         saveTestRun(fixed).catch(console.error);
                     }
                 }
+                getAgents(repositoryId).then(agents => {
+                    console.log('Loaded agents:', agents);
+                    const allAgents = [defaultUiAgent, ...agents];
+                    setAvailableAgents(allAgents);
+                }).catch(console.error);
             } catch (err) {
                 console.error('Failed to load test runs:', err);
             } finally {
@@ -74,7 +85,7 @@ export default function TestPage() {
         setTestUrl('');
         setSubpages([]);
         setAgentCount(4);
-        setUserAgents(['default-ui-agent']);
+        setUserAgents([defaultUiAgent]);
         setFormErrors({});
         setLaunchError(null);
     };
@@ -146,7 +157,7 @@ export default function TestPage() {
             session_id: `session-${Date.now()}`,
             url: testUrl,
             pages: subpages,
-            agent_config: [defaultUiAgent],
+            agent_config: userAgents,
         };
 
         try {
@@ -159,7 +170,7 @@ export default function TestPage() {
                 pages: subpages,
                 config: 'default',
                 agents: agentCount,
-                userAgents: [...userAgents],
+                userAgents: userAgents.map(a => a.id),
                 status: 'running',
                 timestamp: new Date().toISOString(),
                 duration: '—',
@@ -236,6 +247,8 @@ export default function TestPage() {
                                 subpages={subpages}
                                 agentCount={agentCount}
                                 userAgents={userAgents}
+                                lastUsedAgentId={lastUsedAgentId}
+                                availableAgents={availableAgents}
                                 isLaunching={isLaunching}
                                 formErrors={formErrors}
                                 onUrlChange={handleUrlChange}
