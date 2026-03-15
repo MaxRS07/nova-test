@@ -5,24 +5,32 @@ import Topbar from '@/components/Topbar';
 import { useParams, useRouter } from 'next/navigation';
 import { TestRun, TestRunEvent, Fault } from '@/types/nova';
 import { useState, useEffect } from 'react';
-import { getTestRunFresh, getTestRunEvents } from '@/lib/supabase';
+import { getTestRunFresh, getTestRunEvents, saveTestRun } from '@/lib/supabase';
 import { supabase } from '@/lib/supabaseClient';
 
-function applyEvents(events: TestRunEvent[]): { logs: string[]; thinking: string[]; faults: Fault[] } {
+function applyEvents(events: TestRunEvent[]): { logs: string[]; thinking: string[]; faults: Fault[]; duration: number } {
     const logs: string[] = [];
     const thinking: string[] = [];
     const faults: Fault[] = [];
+    let duration = 0;
 
     for (const event of events) {
         try {
             const parsed = JSON.parse(event.data);
-            if (event.type === 'metadata') logs.push('Metadata: ' + JSON.stringify(parsed));
+            if (event.type === 'metadata') {
+                logs.push('Metadata: ' + JSON.stringify(parsed));
+                console.log('Parsed metadata event:', parsed);
+                const time_worked_s = parsed.time_worked_s;
+                if (typeof time_worked_s === 'number' && time_worked_s > 0) {
+                    duration += time_worked_s;
+                }
+            }
             else if (event.type === 'thinking') {
                 if (parsed[4] === '>') thinking.push(parsed);
                 else logs.push(parsed);
             }
             else if (event.type === 'fault') {
-                const p = parsed.faults;
+                const p = parsed;
                 if (Array.isArray(p)) faults.push(...p);
                 else faults.push(p);
             }
@@ -31,7 +39,7 @@ function applyEvents(events: TestRunEvent[]): { logs: string[]; thinking: string
         }
     }
 
-    return { logs, thinking, faults };
+    return { logs, thinking, faults, duration };
 }
 
 export default function TestDetailPage() {
@@ -45,7 +53,7 @@ export default function TestDetailPage() {
     const [events, setEvents] = useState<TestRunEvent[]>([]);
     const [loadError, setLoadError] = useState(false);
 
-    const { logs, thinking, faults } = applyEvents(events);
+    const { logs, thinking, faults, duration } = applyEvents(events);
 
     useEffect(() => {
         if (!testId) return;
@@ -108,6 +116,21 @@ export default function TestDetailPage() {
             supabase.removeChannel(eventsChannel);
         };
     }, [testId]);
+
+    // Save calculated duration to database when it changes
+    useEffect(() => {
+        if (!run || duration === 0) return;
+
+        // Convert duration number to string format and check if it's different from what's stored
+        const durationStr = duration.toFixed(2) + 's';
+        if (run.duration !== durationStr) {
+            const updatedRun: TestRun = {
+                ...run,
+                duration: durationStr,
+            };
+            saveTestRun(updatedRun).catch(console.error);
+        }
+    }, [run?.id, duration, run?.duration]);
 
     const statusBadge = (status: TestRun['status']) => {
         const styles = {
@@ -191,7 +214,7 @@ export default function TestDetailPage() {
                                         </div>
                                         <div>
                                             <span className="text-[var(--muted)]">Duration:</span>{' '}
-                                            <span className="text-[var(--foreground)]">{run.duration}</span>
+                                            <span className="text-[var(--foreground)]">{duration > 0 ? `${duration.toFixed(2)}s` : run.duration}</span>
                                         </div>
                                         <div>
                                             <span className="text-[var(--muted)]">Started:</span>{' '}

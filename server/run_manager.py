@@ -60,16 +60,7 @@ async def execute_act_run(run_id: str, config: dict):
         runner = ActRunner(run_id=run_id)
 
         async for metadata in runner.run_act(url, pages, agent_config):
-            metadata_dict = {
-                "prompt": metadata.prompt,
-                "num_steps": metadata.num_steps_executed,
-            }
-            if hasattr(metadata, "action_type"):
-                metadata_dict["action_type"] = metadata.action_type
-            if hasattr(metadata, "action"):
-                metadata_dict["action"] = metadata.action
-
-            persist_event(run_id, "metadata", metadata_dict)
+            persist_event(run_id, "metadata", metadata)
 
         update_run_status(run_id, "completed")
         process_manager.mark_done(run_id, "completed")

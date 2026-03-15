@@ -94,10 +94,34 @@ export async function getTestRunEvents(runId: string): Promise<TestRunEvent[]> {
 
 /** Fetch fault counts for all runs in a repo. Returns { [run_id]: count }. */
 export async function getFaultCounts(repoId: number): Promise<Record<string, number>> {
-    const url = `${BASE}?resource=fault-counts&repo_id=${repoId}`;
-    const res = await fetch(url, { cache: 'no-store' });
-    if (!res.ok) return parseError(res, 'Failed to fetch fault counts');
-    return res.json();
+    const counts: Record<string, number> = {};
+
+    try {
+        const runs = await getTestRuns(repoId);
+
+        for (const run of runs) {
+            try {
+                const events = await getTestRunEvents(run.id);
+                let faultCount = 0;
+
+                for (const event of events) {
+                    if (event.type === 'fault') {
+                        const faults = JSON.parse(event.data);
+                        faultCount += Array.isArray(faults) ? faults.length : 1;
+                    }
+                }
+
+                counts[run.id] = faultCount;
+            } catch (err) {
+                console.error(`Failed to get fault counts for run ${run.id}:`, err);
+                counts[run.id] = 0;
+            }
+        }
+    } catch (err) {
+        console.error('Failed to fetch test runs for fault counts:', err);
+    }
+
+    return counts;
 }
 
 // ── Agents ───────────────────────────────────────────────────────────────────
